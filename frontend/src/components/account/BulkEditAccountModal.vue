@@ -561,6 +561,64 @@
         </div>
       </div>
 
+      <!-- Temp unschedulable rules -->
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-temp-unsched-label"
+              class="input-label mb-0"
+              for="bulk-edit-temp-unsched-enabled"
+            >
+              {{ t('admin.accounts.tempUnschedulable.title') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.tempUnschedulable.hint') }}
+            </p>
+          </div>
+          <input
+            v-model="enableTempUnsched"
+            id="bulk-edit-temp-unsched-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-temp-unsched-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div v-if="enableTempUnsched" id="bulk-edit-temp-unsched-body" class="mt-3 space-y-3">
+          <button
+            type="button"
+            data-testid="bulk-edit-temp-unsched-toggle"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              tempUnschedEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+            @click="tempUnschedEnabled = !tempUnschedEnabled"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                tempUnschedEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+          <template v-if="tempUnschedEnabled">
+            <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
+              <p class="text-xs text-amber-700 dark:text-amber-400">
+                <Icon name="exclamationTriangle" size="sm" class="mr-1 inline" :stroke-width="2" />
+                {{ t('admin.accounts.tempUnschedulable.bulkReplaceNotice') }}
+              </p>
+            </div>
+            <TempUnschedRulesEditor
+              :rules="tempUnschedRules"
+              @update:rules="tempUnschedRules = $event"
+            />
+          </template>
+          <p v-else class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.tempUnschedulable.bulkDisableHint') }}
+          </p>
+        </div>
+      </div>
+
       <!-- Intercept warmup requests (Anthropic only) -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="flex items-center justify-between">
@@ -1499,6 +1557,13 @@ import {
   getPresetMappingsByPlatform
 } from '@/composables/useModelWhitelist'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import TempUnschedRulesEditor from '@/components/account/TempUnschedRulesEditor.vue'
+import {
+  buildTempUnschedRules,
+  TEMP_UNSCHED_ENABLED_CREDENTIAL_KEY,
+  TEMP_UNSCHED_RULES_CREDENTIAL_KEY,
+  type TempUnschedRuleForm
+} from '@/components/account/tempUnschedRules'
 import {
   buildHeaderOverridesObject,
   isHeaderOverrideCapable,
@@ -1649,6 +1714,7 @@ interface ModelMapping {
 const enableBaseUrl = ref(false)
 const enableModelRestriction = ref(false)
 const enableCustomErrorCodes = ref(false)
+const enableTempUnsched = ref(false)
 const enableInterceptWarmup = ref(false)
 const enableHeaderOverride = ref(false)
 const enableProxy = ref(false)
@@ -1683,6 +1749,8 @@ const allowedModels = ref<string[]>([])
 const modelMappings = ref<ModelMapping[]>([])
 const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
+const tempUnschedEnabled = ref(true)
+const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const interceptWarmupRequests = ref(false)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
@@ -2040,6 +2108,15 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     credentialsChanged = true
   }
 
+  if (enableTempUnsched.value) {
+    // 后端使用 JSONB || merge 语义：规则列表整键替换；关闭时显式写入 false + 空数组以清除旧规则
+    credentials[TEMP_UNSCHED_ENABLED_CREDENTIAL_KEY] = tempUnschedEnabled.value
+    credentials[TEMP_UNSCHED_RULES_CREDENTIAL_KEY] = tempUnschedEnabled.value
+      ? buildTempUnschedRules(tempUnschedRules.value)
+      : []
+    credentialsChanged = true
+  }
+
   if (enableInterceptWarmup.value) {
     credentials.intercept_warmup_requests = interceptWarmupRequests.value
     credentialsChanged = true
@@ -2210,6 +2287,7 @@ const handleSubmit = async () => {
     (enableOpenAIResponsesMode.value && allOpenAIAPIKey.value) ||
     enableModelRestriction.value ||
     enableCustomErrorCodes.value ||
+    enableTempUnsched.value ||
     enableInterceptWarmup.value ||
     enableHeaderOverride.value ||
     enableProxy.value ||
@@ -2243,6 +2321,16 @@ const handleSubmit = async () => {
       appStore.showError(t('admin.accounts.grokCustomBaseUrl.invalid'))
       return
     }
+  }
+
+  if (
+    enableTempUnsched.value &&
+    tempUnschedEnabled.value &&
+    buildTempUnschedRules(tempUnschedRules.value).length === 0
+  ) {
+    // 开启但没有有效规则会把所选账号的既有规则静默替换为空，清空请走关闭开关的路径
+    appStore.showError(t('admin.accounts.tempUnschedulable.rulesInvalid'))
+    return
   }
 
   if (enableHeaderOverride.value && headerOverrideEnabled.value) {
@@ -2356,6 +2444,7 @@ watch(
       enableBaseUrl.value = false
       enableModelRestriction.value = false
       enableCustomErrorCodes.value = false
+      enableTempUnsched.value = false
       enableInterceptWarmup.value = false
       enableHeaderOverride.value = false
       enableProxy.value = false
@@ -2393,6 +2482,8 @@ watch(
       modelMappings.value = []
       selectedErrorCodes.value = []
       customErrorCodeInput.value = null
+      tempUnschedEnabled.value = true
+      tempUnschedRules.value = []
       interceptWarmupRequests.value = false
       headerOverrideEnabled.value = false
       headerOverrideRows.value = []

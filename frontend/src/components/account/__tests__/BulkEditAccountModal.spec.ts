@@ -167,6 +167,62 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('批量开启临时不可调度时整体提交规则列表', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+
+    await wrapper.get('#bulk-edit-temp-unsched-enabled').setValue(true)
+    const preset = wrapper
+      .findAll('button')
+      .find((btn) => btn.text().includes('admin.accounts.tempUnschedulable.presets.unavailableLabel'))
+    expect(preset).toBeDefined()
+    await preset!.trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: {
+        temp_unschedulable_enabled: true,
+        temp_unschedulable_rules: [
+          {
+            error_code: 503,
+            keywords: ['unavailable', 'maintenance'],
+            duration_minutes: 30,
+            description: 'admin.accounts.tempUnschedulable.presets.unavailableDesc',
+            scope: 'model'
+          }
+        ]
+      }
+    })
+  })
+
+  it('批量关闭临时不可调度时显式写入 false 与空规则以清除旧配置', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+
+    await wrapper.get('#bulk-edit-temp-unsched-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-temp-unsched-toggle"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: {
+        temp_unschedulable_enabled: false,
+        temp_unschedulable_rules: []
+      }
+    })
+  })
+
+  it('批量开启临时不可调度但没有有效规则时拦截提交', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+
+    await wrapper.get('#bulk-edit-temp-unsched-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith('admin.accounts.tempUnschedulable.rulesInvalid')
+  })
+
   it('全部目标为 Grok OAuth 时，官方主机 base_url 作为手动端点切换正常提交', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['grok'],

@@ -438,6 +438,8 @@ export default {
         description: 'Description',
         descriptionPlaceholder: 'Optional note for this rule',
         rulesInvalid: 'Add at least one rule with error code, keywords, and duration.',
+        bulkReplaceNotice: 'Saving will replace the existing temporary unschedulable rules on the selected accounts with the rules below.',
+        bulkDisableHint: 'Saving will disable temporary unschedulable rules and clear existing rules on the selected accounts.',
         viewDetails: 'View temp unschedulable details',
         accountName: 'Account',
         triggeredAt: 'Triggered At',

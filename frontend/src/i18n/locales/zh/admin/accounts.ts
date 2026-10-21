@@ -486,6 +486,8 @@ export default {
         description: '描述',
         descriptionPlaceholder: '可选，便于记忆规则用途',
         rulesInvalid: '请至少填写一条包含错误码、关键词和时长的规则。',
+        bulkReplaceNotice: '保存后将用以下规则整体替换所选账号原有的临时不可调度规则。',
+        bulkDisableHint: '保存后将关闭所选账号的临时不可调度并清空已有规则。',
         viewDetails: '查看临时不可调度详情',
         accountName: '账号',
         triggeredAt: '触发时间',
