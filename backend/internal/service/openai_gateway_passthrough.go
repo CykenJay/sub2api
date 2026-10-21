@@ -1644,7 +1644,8 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 			return statusCode, false
 		}
 		fallthrough
-	case http.StatusUnauthorized, http.StatusTooManyRequests, 529:
+	case http.StatusUnauthorized, http.StatusTooManyRequests, 529, http.StatusServiceUnavailable:
+		// 503 只来自容量降载：默认不改账号状态，仅让管理员显式配置的临时不可调度规则生效。
 		ctx := context.Background()
 		if c != nil && c.Request != nil {
 			ctx = c.Request.Context()

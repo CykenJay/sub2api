@@ -29,6 +29,11 @@ func (r *capacityShedAccountRepoStub) SetTempUnschedulable(_ context.Context, _ 
 	return nil
 }
 
+func (r *capacityShedAccountRepoStub) SetModelRateLimit(_ context.Context, _ int64, _ string, _ time.Time, _ ...string) error {
+	r.tempUnschedCalls++
+	return nil
+}
+
 // 上游容量降载是请求级信号：故障因素（客户端身份、模型容量）与账号无关，
 // 同账号重试用尽后不得把账号临时摘掉——否则一个被降载的请求会顺着 failover
 // 把整池账号逐个封禁，而每个账号都会以同一个错误失败。
@@ -490,4 +495,91 @@ func TestCodexOutboundVersionHasSingleSource(t *testing.T) {
 	require.GreaterOrEqual(t, CompareVersions(codexCLIVersion, codexUpstreamMinVersion), 0,
 		"codexCLIVersion=%q 不得低于上游最低门槛 %q", codexCLIVersion, codexUpstreamMinVersion,
 	)
+}
+
+func capacityShedTempUnschedAccount() *Account {
+	return &Account{
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Name: "acc",
+		Credentials: map[string]any{
+			"temp_unschedulable_enabled": true,
+			"temp_unschedulable_rules": []any{
+				map[string]any{"error_code": float64(503), "keywords": []any{"overloaded"}, "duration_minutes": float64(5)},
+			},
+		},
+	}
+}
+
+func runCapacityShedStream(t *testing.T, account *Account, withOutput bool) (*capacityShedAccountRepoStub, *httptest.ResponseRecorder, error) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	repo := &capacityShedAccountRepoStub{}
+	svc := &OpenAIGatewayService{
+		cfg:              &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		rateLimitService: &RateLimitService{accountRepo: repo},
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	lines := []string{
+		"event: response.created",
+		`data: {"type":"response.created","response":{"id":"resp_1"}}`,
+		"",
+	}
+	if withOutput {
+		lines = append(lines,
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"partial"}`,
+			"",
+		)
+	}
+	lines = append(lines,
+		"event: response.failed",
+		`data: {"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`,
+		"",
+	)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(strings.Join(lines, "\n"))),
+		Header:     http.Header{"X-Request-Id": []string{"rid-shed-rule"}},
+	}
+	_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+	return repo, rec, err
+}
+
+// 流内 response.failed 降载被识别为 503 后，管理员显式配置的 503 临时不可调度规则
+// 必须生效；已输出语义内容时仍不得重放，只让后续请求避开该账号。
+func TestOpenAIStreamCapacityShedAfterOutputHonorsTempUnschedRule(t *testing.T) {
+	repo, rec, err := runCapacityShedStream(t, capacityShedTempUnschedAccount(), true)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.Contains(t, rec.Body.String(), "partial")
+	require.Equal(t, 1, repo.tempUnschedCalls)
+}
+
+// 尚未输出时命中规则：账号已被暂停，不得再在同账号重试，直接换号。
+func TestOpenAIStreamCapacityShedBeforeOutputHonorsTempUnschedRule(t *testing.T) {
+	repo, rec, err := runCapacityShedStream(t, capacityShedTempUnschedAccount(), false)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.Empty(t, rec.Body.String())
+	require.Equal(t, 1, repo.tempUnschedCalls)
+}
+
+// 对照组：未配置规则时降载仍是请求级信号，不改账号状态并保留同账号重试。
+func TestOpenAIStreamCapacityShedWithoutRuleKeepsAccountSchedulable(t *testing.T) {
+	for _, withOutput := range []bool{false, true} {
+		repo, _, err := runCapacityShedStream(t, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Name: "acc"}, withOutput)
+		require.Error(t, err)
+		require.Zero(t, repo.tempUnschedCalls)
+		var failoverErr *UpstreamFailoverError
+		if !withOutput {
+			require.ErrorAs(t, err, &failoverErr)
+			require.True(t, failoverErr.RetryableOnSameAccount)
+		}
+	}
 }

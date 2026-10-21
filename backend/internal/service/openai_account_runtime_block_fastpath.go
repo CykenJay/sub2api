@@ -101,13 +101,19 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
 		scheduleOpenCodeGoUsageActivity(s.deferredService, account)
 	}
-	// Capacity shedding describes this request, not account health. Keep the
-	// account schedulable while the request-local retry budget handles recovery.
-	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
-		return false
-	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
+	// Capacity shedding describes this request, not account health. Keep the
+	// account schedulable while the request-local retry budget handles recovery,
+	// unless the admin configured an explicit temp-unschedulable rule for it.
+	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
+		if s == nil || s.rateLimitService == nil || !account.ShouldHandleErrorCode(statusCode) ||
+			len(matchTempUnschedulableRules(account, statusCode, responseBody)) == 0 {
+			return false
+		}
+		ruleCtx := withTempUnschedulableModel(stateCtx, canonicalModel)
+		return s.rateLimitService.tryTempUnschedulable(ruleCtx, account, statusCode, responseBody, firstRequestedModel(canonicalModel))
+	}
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIHTTPUpstreamAccessStateError(statusCode, "", responseBody) {
 		message := "OpenAI upstream account or workspace is unavailable"
 		if upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody)); upstreamMsg != "" {
