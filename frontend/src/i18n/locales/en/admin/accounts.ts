@@ -462,7 +462,9 @@ export default {
           rateLimitLabel: '429 Rate Limit',
           rateLimitDesc: 'Rate limited - pause 10 minutes',
           unavailableLabel: '503 Unavailable',
-          unavailableDesc: 'Unavailable - pause 30 minutes'
+          unavailableDesc: 'Unavailable - pause 30 minutes',
+          capacityShedLabel: '503 Capacity Overloaded',
+          capacityShedDesc: 'Upstream capacity overloaded - pause 5 minutes'
         }
       },
       clearRateLimit: 'Clear Rate Limit',

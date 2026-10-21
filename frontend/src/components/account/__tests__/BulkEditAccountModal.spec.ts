@@ -196,6 +196,34 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('503 容量过载预设只匹配 overloaded 并暂停 5 分钟', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+
+    await wrapper.get('#bulk-edit-temp-unsched-enabled').setValue(true)
+    const preset = wrapper
+      .findAll('button')
+      .find((btn) => btn.text().includes('admin.accounts.tempUnschedulable.presets.capacityShedLabel'))
+    expect(preset).toBeDefined()
+    await preset!.trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: {
+        temp_unschedulable_enabled: true,
+        temp_unschedulable_rules: [
+          {
+            error_code: 503,
+            keywords: ['overloaded'],
+            duration_minutes: 5,
+            description: 'admin.accounts.tempUnschedulable.presets.capacityShedDesc',
+            scope: 'model'
+          }
+        ]
+      }
+    })
+  })
+
   it('批量关闭临时不可调度时显式写入 false 与空规则以清除旧配置', async () => {
     const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
 

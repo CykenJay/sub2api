@@ -97,5 +97,17 @@ export const buildTempUnschedPresets = (t: (key: string) => string): TempUnsched
       description: t('admin.accounts.tempUnschedulable.presets.unavailableDesc'),
       scope: 'model'
     }
+  },
+  {
+    // OpenAI 容量过载（含流内 response.failed）按 503 识别，错误码 server_is_overloaded
+    // 与文案 "...currently overloaded..." 都含 overloaded，匹配不到上面的维护预设。
+    label: t('admin.accounts.tempUnschedulable.presets.capacityShedLabel'),
+    rule: {
+      error_code: 503,
+      keywords: 'overloaded',
+      duration_minutes: 5,
+      description: t('admin.accounts.tempUnschedulable.presets.capacityShedDesc'),
+      scope: 'model'
+    }
   }
 ]

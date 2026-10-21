@@ -510,7 +510,9 @@ export default {
           rateLimitLabel: '429 限流',
           rateLimitDesc: '触发限流 - 暂停 10 分钟',
           unavailableLabel: '503 维护',
-          unavailableDesc: '服务不可用 - 暂停 30 分钟'
+          unavailableDesc: '服务不可用 - 暂停 30 分钟',
+          capacityShedLabel: '503 容量过载',
+          capacityShedDesc: '上游容量过载 - 暂停 5 分钟'
         }
       },
       usageWindow: {
