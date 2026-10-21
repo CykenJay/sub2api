@@ -583,3 +583,29 @@ func TestOpenAIStreamCapacityShedWithoutRuleKeepsAccountSchedulable(t *testing.T
 		}
 	}
 }
+
+// response.failed 回显完整 response 对象：instructions/tools 排在 error 之前且可超过
+// 规则匹配的 64KB 截断窗口，错误对象必须仍参与关键词匹配，且状态详情记录错误本身。
+func TestTempUnschedRuleMatchesResponseFailedErrorBeyondTruncation(t *testing.T) {
+	account := capacityShedTempUnschedAccount()
+	payload := []byte(`{"type":"response.failed","response":{"id":"resp_1","instructions":"` +
+		strings.Repeat("x", tempUnschedBodyMaxBytes+1024) +
+		`","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`)
+
+	require.Len(t, matchTempUnschedulableRules(account, http.StatusServiceUnavailable, payload), 1)
+	msg := tempUnschedErrorMessage(payload)
+	require.Contains(t, msg, "server_is_overloaded")
+	require.NotContains(t, msg, "xxxx")
+
+	// 会话内容（instructions / 已生成 output）里出现关键词时不得误触发：
+	// slow_down 同样被识别为 503，但错误对象本身不含 overloaded。
+	slowDown := []byte(`{"type":"response.failed","response":{"id":"resp_1","instructions":"retry when the server is overloaded",` +
+		`"output":[{"type":"message","content":[{"type":"output_text","text":"handle overloaded servers"}]}],` +
+		`"error":{"code":"slow_down","message":"Temporary limit."}}}`)
+	require.Equal(t, http.StatusServiceUnavailable, openAIStreamFailureStatus(slowDown, "Temporary limit."))
+	require.Empty(t, matchTempUnschedulableRules(account, http.StatusServiceUnavailable, slowDown))
+
+	// 没有 response.error 时保持原有截断语义：窗口外的关键词不参与匹配。
+	plain := []byte(`{"detail":"` + strings.Repeat("x", tempUnschedBodyMaxBytes+1024) + ` overloaded"}`)
+	require.Empty(t, matchTempUnschedulableRules(account, http.StatusServiceUnavailable, plain))
+}

@@ -2688,6 +2688,11 @@ func matchTempUnschedulableRules(account *Account, statusCode int, responseBody 
 		body = body[:tempUnschedBodyMaxBytes]
 	}
 	bodyLower := strings.ToLower(string(body))
+	if errRaw := tempUnschedResponseErrorRaw(responseBody); errRaw != "" {
+		// Responses 失败事件回显完整 response 对象：只匹配错误对象，避免 instructions /
+		// 已生成 output 里的会话文字误触发规则，也避免错误对象落在截断窗口之外。
+		bodyLower = strings.ToLower(errRaw)
+	}
 	matches := make([]tempUnschedulableRuleMatch, 0, 1)
 	for idx, rule := range rules {
 		if rule.ErrorCode != statusCode || len(rule.Keywords) == 0 {
@@ -2793,7 +2798,7 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 		StatusCode:      statusCode,
 		MatchedKeyword:  matchedKeyword,
 		RuleIndex:       ruleIndex,
-		ErrorMessage:    truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
+		ErrorMessage:    tempUnschedErrorMessage(responseBody),
 		Scope:           TempUnschedScopeAccount,
 	}
 	if modelScoped {
@@ -2836,6 +2841,27 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 
 	slog.Info("account_temp_unschedulable", "account_id", account.ID, "until", until, "rule_index", ruleIndex, "rule_scope", rule.Scope, "status_code", statusCode)
 	return true
+}
+
+// tempUnschedResponseErrorRaw 返回 Responses 流内失败事件（response.failed）里的
+// response.error 原文。该事件回显完整 response 对象，instructions/tools 往往排在
+// error 之前且可达数十 KB，直接截断 body 会丢掉真正的错误信息。
+func tempUnschedResponseErrorRaw(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	errObj := gjson.GetBytes(body, "response.error")
+	if !errObj.IsObject() {
+		return ""
+	}
+	return errObj.Raw
+}
+
+func tempUnschedErrorMessage(body []byte) string {
+	if errRaw := tempUnschedResponseErrorRaw(body); errRaw != "" {
+		return truncateTempUnschedMessage([]byte(errRaw), tempUnschedMessageMaxBytes)
+	}
+	return truncateTempUnschedMessage(body, tempUnschedMessageMaxBytes)
 }
 
 func truncateTempUnschedMessage(body []byte, maxBytes int) string {
