@@ -62,6 +62,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"upstream_billing_probe",
 	"upstream_billing_rate_sync",
 	"ollama_cloud_usage",
+	"model_degradation_probe",
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
@@ -3811,6 +3812,47 @@ func (r *accountRepository) FindByExtraField(ctx context.Context, key string, va
 // Without this, every nanosecond timestamp is treated as malformed and the
 // fail-open ordering pins the cycle to the lowest account IDs, starving the
 // rest of the pool.
+// ListModelDegradationProbeCandidates 列出配置了降智检测间隔的活跃 OpenAI 账号，
+// 只取 id 与 extra，到期判断在服务层完成。
+func (r *accountRepository) ListModelDegradationProbeCandidates(ctx context.Context) ([]service.ModelDegradationProbeCandidateRow, error) {
+	if r.sql == nil {
+		return nil, errors.New("account repository SQL executor not configured")
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT id, extra
+		FROM accounts
+		WHERE deleted_at IS NULL
+			AND status = 'active'
+			AND platform = 'openai'
+			AND type IN ('oauth', 'apikey')
+			AND extra ? 'model_degradation_probe_interval_minutes'
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]service.ModelDegradationProbeCandidateRow, 0)
+	for rows.Next() {
+		var (
+			id  int64
+			raw []byte
+		)
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		extra := map[string]any{}
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &extra); err != nil {
+				continue
+			}
+		}
+		out = append(out, service.ModelDegradationProbeCandidateRow{ID: id, Extra: extra})
+	}
+	return out, rows.Err()
+}
+
 func (r *accountRepository) ListDueUpstreamBillingProbeAccounts(ctx context.Context, now time.Time, limit int) ([]service.Account, error) {
 	if limit <= 0 {
 		return []service.Account{}, nil

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -2269,6 +2270,31 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 		slog.Warn("clear_model_rate_limits_on_temp_unsched_reset_failed", "account_id", accountID, "error", err)
 	}
 	s.notifyAccountSchedulingBlockCleared(accountID)
+	return nil
+}
+
+// PauseAccountTempUnschedulable 由后台检测主动暂停账号调度，同步临时不可调度缓存与运行时阻断。
+// 账号已处于更晚解除的临时不可调度时保持原状，不缩短已有冷却。
+func (s *RateLimitService) PauseAccountTempUnschedulable(ctx context.Context, account *Account, until time.Time, reason, source string) error {
+	if s == nil || account == nil {
+		return errors.New("rate limit service is unavailable")
+	}
+	if account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(until) {
+		return nil
+	}
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		return err
+	}
+	account.TempUnschedulableUntil = cloneTimePtr(&until)
+	account.TempUnschedulableReason = reason
+	if s.tempUnschedCache != nil {
+		if state := tempUnschedStateFromStoredReason(reason, until.Unix()); state != nil {
+			if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
+				slog.Warn("temp_unsched_cache_set_failed", "account_id", account.ID, "source", source, "error", err)
+			}
+		}
+	}
+	s.notifyAccountSchedulingBlocked(account, until, source)
 	return nil
 }
 
