@@ -1666,6 +1666,21 @@
         </div>
       </div>
 
+      <!-- Model degradation check (OpenAI OAuth / API Key) -->
+      <div
+        v-if="supportsModelDegradationProbe"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-3"
+        data-testid="edit-model-degradation-section"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.modelDegradation.title') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.modelDegradation.hint') }}
+          </p>
+        </div>
+        <ModelDegradationProbeSettings v-model="modelDegradationSettings" />
+      </div>
+
       <!-- Temp Unschedulable Rules -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
@@ -3472,6 +3487,13 @@ import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiErro
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { supportsAccountQuota } from '@/utils/accountQuota'
 import { buildTempUnschedPresets } from '@/components/account/tempUnschedRules'
+import ModelDegradationProbeSettings from '@/components/account/ModelDegradationProbeSettings.vue'
+import {
+  buildModelDegradationExtra,
+  defaultModelDegradationSettings,
+  readModelDegradationSettings,
+  type ModelDegradationSettings
+} from '@/components/account/modelDegradationProbe'
 import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
@@ -4145,6 +4167,11 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+// 模型降智检测（OpenAI OAuth/API Key）
+const modelDegradationSettings = ref<ModelDegradationSettings>(defaultModelDegradationSettings())
+const supportsModelDegradationProbe = computed(() =>
+  props.account?.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'apikey')
+)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -4612,6 +4639,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
+
+  modelDegradationSettings.value = readModelDegradationSettings(extra)
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
@@ -6281,6 +6310,13 @@ const handleSubmit = async () => {
           newExtra.codex_fingerprint_mode = codexFingerprintMode.value
         } else {
           delete newExtra.codex_fingerprint_mode
+        }
+      }
+
+      if (supportsModelDegradationProbe.value) {
+        for (const [key, value] of Object.entries(buildModelDegradationExtra(modelDegradationSettings.value))) {
+          if (value > 0) newExtra[key] = value
+          else delete newExtra[key]
         }
       }
 

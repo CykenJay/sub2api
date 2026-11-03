@@ -619,6 +619,42 @@
         </div>
       </div>
 
+      <!-- Model degradation check (OpenAI OAuth / API Key) -->
+      <div
+        v-if="allModelDegradationProbeCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="bulk-edit-model-degradation-section"
+      >
+        <div class="flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-model-degradation-label"
+              class="input-label mb-0"
+              for="bulk-edit-model-degradation-enabled"
+            >
+              {{ t('admin.accounts.modelDegradation.title') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.modelDegradation.hint') }}
+            </p>
+          </div>
+          <input
+            v-model="enableModelDegradation"
+            id="bulk-edit-model-degradation-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-model-degradation-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-model-degradation-body"
+          class="mt-3"
+          :class="!enableModelDegradation && 'pointer-events-none opacity-50'"
+        >
+          <ModelDegradationProbeSettings v-model="modelDegradationSettings" />
+        </div>
+      </div>
+
       <!-- Intercept warmup requests (Anthropic only) -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="flex items-center justify-between">
@@ -1558,6 +1594,12 @@ import {
 } from '@/composables/useModelWhitelist'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import TempUnschedRulesEditor from '@/components/account/TempUnschedRulesEditor.vue'
+import ModelDegradationProbeSettings from '@/components/account/ModelDegradationProbeSettings.vue'
+import {
+  buildModelDegradationExtra,
+  defaultModelDegradationSettings,
+  type ModelDegradationSettings
+} from '@/components/account/modelDegradationProbe'
 import {
   buildTempUnschedRules,
   TEMP_UNSCHED_ENABLED_CREDENTIAL_KEY,
@@ -1657,6 +1699,16 @@ const allOpenAIAPIKey = computed(() => {
   )
 })
 
+// 模型降智检测只对 OpenAI OAuth / API Key 账号生效
+const allModelDegradationProbeCapable = computed(() => {
+  return (
+    targetSelectedPlatforms.value.length === 1 &&
+    targetSelectedPlatforms.value[0] === 'openai' &&
+    targetSelectedTypes.value.length > 0 &&
+    targetSelectedTypes.value.every(t => t === 'oauth' || t === 'apikey')
+  )
+})
+
 // 上游倍率自动探测已放宽到全部 API-key 平台：只要求所选类型全为 apikey，
 // 平台不限（sub2api 上游即可应答 /v1/sub2api/billing）。
 const allBillingProbeCapable = computed(() => {
@@ -1737,6 +1789,7 @@ const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
+const enableModelDegradation = ref(false)
 
 // State - field values
 const submitting = ref(false)
@@ -1751,6 +1804,7 @@ const selectedErrorCodes = ref<number[]>([])
 const customErrorCodeInput = ref<number | null>(null)
 const tempUnschedEnabled = ref(true)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
+const modelDegradationSettings = ref<ModelDegradationSettings>(defaultModelDegradationSettings())
 const interceptWarmupRequests = ref(false)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
@@ -2218,6 +2272,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     updates.extra = extra
   }
 
+  if (enableModelDegradation.value && allModelDegradationProbeCapable.value) {
+    Object.assign(ensureExtra(), buildModelDegradationExtra(modelDegradationSettings.value))
+  }
+
   // UMQ mode（独立于 RPM 保存）
   if (userMsgQueueMode.value !== null) {
     const umqExtra = ensureExtra()
@@ -2306,6 +2364,7 @@ const handleSubmit = async () => {
     enableOpenAICompactMode.value ||
     enableOpenAICompactModelMapping.value ||
     enableRpmLimit.value ||
+    (enableModelDegradation.value && allModelDegradationProbeCapable.value) ||
     userMsgQueueMode.value !== null
 
   if (!hasAnyFieldEnabled) {
@@ -2469,6 +2528,7 @@ watch(
       enableOpenAICompactMode.value = false
       enableOpenAICompactModelMapping.value = false
       enableRpmLimit.value = false
+      enableModelDegradation.value = false
 
       // Reset all values
       baseUrl.value = ''
@@ -2484,6 +2544,7 @@ watch(
       customErrorCodeInput.value = null
       tempUnschedEnabled.value = true
       tempUnschedRules.value = []
+      modelDegradationSettings.value = defaultModelDegradationSettings()
       interceptWarmupRequests.value = false
       headerOverrideEnabled.value = false
       headerOverrideRows.value = []

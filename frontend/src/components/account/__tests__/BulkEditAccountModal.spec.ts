@@ -240,6 +240,50 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it('批量设置降智检测时写入间隔与暂停阈值', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth', 'apikey'] })
+
+    await wrapper.get('#bulk-edit-model-degradation-enabled').setValue(true)
+    await wrapper.get('[data-testid="model-degradation-interval"]').setValue('30')
+    await wrapper.get('[data-testid="model-degradation-pause-threshold"]').setValue('2')
+    await wrapper.get('[data-testid="model-degradation-pause-minutes"]').setValue('90')
+    await wrapper.get('[data-testid="model-degradation-cooldown"]').setValue('120')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        model_degradation_probe_interval_minutes: 30,
+        model_degradation_probe_pause_threshold: 2,
+        model_degradation_probe_pause_minutes: 90,
+        model_degradation_probe_cooldown_minutes: 120
+      }
+    })
+  })
+
+  it('批量关闭降智检测时显式写入 0 覆盖旧值', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+
+    await wrapper.get('#bulk-edit-model-degradation-enabled').setValue(true)
+    await wrapper.get('[data-testid="model-degradation-interval"]').setValue('')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        model_degradation_probe_interval_minutes: 0,
+        model_degradation_probe_pause_threshold: 0,
+        model_degradation_probe_pause_minutes: 60,
+        model_degradation_probe_cooldown_minutes: 0
+      }
+    })
+  })
+
+  it('非 OpenAI 目标不展示降智检测设置', () => {
+    const wrapper = mountModal({ selectedPlatforms: ['anthropic'], selectedTypes: ['oauth'] })
+    expect(wrapper.find('[data-testid="bulk-edit-model-degradation-section"]').exists()).toBe(false)
+  })
+
   it('批量开启临时不可调度但没有有效规则时拦截提交', async () => {
     const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
 

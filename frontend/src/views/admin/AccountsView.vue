@@ -184,6 +184,7 @@
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
           @probe-upstream-billing="handleBulkProbeUpstreamBilling"
+          @probe-model-degradation="handleBulkProbeModelDegradation"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -378,6 +379,13 @@
               @probe="handleProbeUpstreamBilling(row)"
             />
           </template>
+          <template #cell-model_degradation="{ row }">
+            <ModelDegradationCell
+              :account="row"
+              :probing="probingModelDegradation.has(row.id)"
+              @probe="handleProbeModelDegradation(row)"
+            />
+          </template>
           <template #cell-priority="{ row }">
             <AccountPriorityCell
               :account="row"
@@ -525,6 +533,7 @@ import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vu
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
+import ModelDegradationCell from '@/components/account/ModelDegradationCell.vue'
 import AccountPriorityCell from '@/components/account/AccountPriorityCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -623,6 +632,7 @@ const togglingSchedulable = ref<number | null>(null)
 const menu = reactive<{show:boolean, acc:Account|null, anchorRect:DOMRect|null}>({ show: false, acc: null, anchorRect: null })
 const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
+const probingModelDegradation = reactive(new Set<number>())
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
 const upstreamBillingNow = ref(Date.now())
 const upstreamBillingRateETag = ref<string | null>(null)
@@ -1842,6 +1852,7 @@ const allColumns = computed(() => {
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
     { key: 'upstream_billing_rate', label: t('admin.accounts.columns.upstreamBillingRate'), sortable: true },
+    { key: 'model_degradation', label: t('admin.accounts.columns.modelDegradation'), sortable: false },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
@@ -2290,6 +2301,117 @@ const handleProbeUpstreamBilling = async (account: Account) => {
     probingUpstreamBilling.delete(account.id)
   }
 }
+const handleProbeModelDegradation = async (account: Account) => {
+  if (probingModelDegradation.has(account.id)) return
+  probingModelDegradation.add(account.id)
+  try {
+    const result = await adminAPI.accounts.probeModelDegradation(account.id)
+    const snapshot = result.snapshot
+    if (snapshot) {
+      const current = accounts.value.find(item => item.id === account.id) ?? account
+      patchAccountInList({ ...current, extra: { ...current.extra, model_degradation_probe: snapshot } })
+      appStore.showInfo(t('admin.accounts.modelDegradation.probeDone', {
+        status: t(`admin.accounts.modelDegradation.${snapshot.status}`)
+      }))
+    }
+  } catch (error) {
+    console.error('Failed to probe model degradation:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.modelDegradation.probeFailed')))
+  } finally {
+    probingModelDegradation.delete(account.id)
+  }
+}
+// 批量降智检测在后台执行：记录提交时间，轮询快照，last_attempt_at 晚于提交时间即视为完成。
+const MODEL_DEGRADATION_BATCH_MAX = 200
+const MODEL_DEGRADATION_POLL_INTERVAL_MS = 10_000
+const MODEL_DEGRADATION_STALL_TIMEOUT_MS = 10 * 60_000
+const modelDegradationPending = new Map<number, number>()
+const modelDegradationBatchTally = { normal: 0, degraded: 0, failed: 0 }
+let modelDegradationPollTimer: ReturnType<typeof setTimeout> | null = null
+let modelDegradationLastProgressAt = 0
+
+const stopModelDegradationPolling = () => {
+  if (modelDegradationPollTimer !== null) {
+    clearTimeout(modelDegradationPollTimer)
+    modelDegradationPollTimer = null
+  }
+}
+
+const finishModelDegradationBatch = () => {
+  stopModelDegradationPolling()
+  const pending = modelDegradationPending.size
+  modelDegradationPending.forEach((_, id) => probingModelDegradation.delete(id))
+  modelDegradationPending.clear()
+  if (pending > 0) {
+    appStore.showError(t('admin.accounts.modelDegradation.batchStalled', { count: pending }))
+  } else {
+    appStore.showSuccess(t('admin.accounts.modelDegradation.batchFinished', { ...modelDegradationBatchTally }))
+  }
+  Object.assign(modelDegradationBatchTally, { normal: 0, degraded: 0, failed: 0 })
+}
+
+const pollModelDegradationSnapshots = async () => {
+  modelDegradationPollTimer = null
+  const ids = [...modelDegradationPending.keys()]
+  try {
+    for (let i = 0; i < ids.length; i += MODEL_DEGRADATION_BATCH_MAX) {
+      const items = await adminAPI.accounts.getModelDegradationSnapshots(ids.slice(i, i + MODEL_DEGRADATION_BATCH_MAX))
+      for (const item of items) {
+        const submittedAt = modelDegradationPending.get(item.account_id)
+        const snapshot = item.snapshot
+        if (submittedAt == null || !snapshot || Date.parse(snapshot.last_attempt_at) < submittedAt) continue
+        modelDegradationPending.delete(item.account_id)
+        probingModelDegradation.delete(item.account_id)
+        modelDegradationBatchTally[snapshot.status] += 1
+        modelDegradationLastProgressAt = Date.now()
+        const current = accounts.value.find(account => account.id === item.account_id)
+        if (current) patchAccountInList({ ...current, extra: { ...current.extra, model_degradation_probe: snapshot } })
+      }
+    }
+  } catch (error) {
+    console.error('Failed to poll model degradation snapshots:', error)
+  }
+  if (modelDegradationPending.size === 0 || Date.now() - modelDegradationLastProgressAt > MODEL_DEGRADATION_STALL_TIMEOUT_MS) {
+    finishModelDegradationBatch()
+    return
+  }
+  modelDegradationPollTimer = setTimeout(pollModelDegradationSnapshots, MODEL_DEGRADATION_POLL_INTERVAL_MS)
+}
+
+const handleBulkProbeModelDegradation = async () => {
+  const accountIDs = [...selIds.value]
+  if (accountIDs.length > MODEL_DEGRADATION_BATCH_MAX) {
+    appStore.showError(t('admin.accounts.modelDegradation.batchLimit', { max: MODEL_DEGRADATION_BATCH_MAX }))
+    return
+  }
+  if (accountIDs.length === 0) return
+  try {
+    // 留出时钟误差余量，避免把提交前刚结束的检测误判为本次结果。
+    const submittedAt = Date.now() - 5_000
+    const result = await adminAPI.accounts.probeModelDegradationBatch(accountIDs)
+    if (result.queued.length === 0) {
+      appStore.showError(t('admin.accounts.modelDegradation.batchNoEligible'))
+      return
+    }
+    result.queued.forEach(id => {
+      modelDegradationPending.set(id, submittedAt)
+      probingModelDegradation.add(id)
+    })
+    modelDegradationLastProgressAt = Date.now()
+    const skipped = result.skipped.length
+    appStore.showInfo(
+      t('admin.accounts.modelDegradation.batchQueued', { count: result.queued.length }) +
+        (skipped > 0 ? t('admin.accounts.modelDegradation.batchSkipped', { count: skipped }) : '')
+    )
+    if (modelDegradationPollTimer === null) {
+      modelDegradationPollTimer = setTimeout(pollModelDegradationSnapshots, MODEL_DEGRADATION_POLL_INTERVAL_MS)
+    }
+  } catch (error) {
+    console.error('Failed to queue model degradation batch:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.modelDegradation.probeFailed')))
+  }
+}
+
 const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
@@ -2604,6 +2726,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   upstreamBillingRateAbortController?.abort()
+  stopModelDegradationPolling()
   if (usageBatchFlushTimer !== null) {
     clearTimeout(usageBatchFlushTimer)
     usageBatchFlushTimer = null

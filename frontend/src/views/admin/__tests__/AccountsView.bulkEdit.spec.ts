@@ -13,8 +13,11 @@ const {
   getAllGroups,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
+  probeModelDegradationBatch,
+  getModelDegradationSnapshots,
   showError,
-  showSuccess
+  showSuccess,
+  showInfo
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
@@ -25,8 +28,11 @@ const {
   getAllGroups: vi.fn(),
   probeUpstreamBilling: vi.fn(),
   probeUpstreamBillingBatch: vi.fn(),
+  probeModelDegradationBatch: vi.fn(),
+  getModelDegradationSnapshots: vi.fn(),
   showError: vi.fn(),
-  showSuccess: vi.fn()
+  showSuccess: vi.fn(),
+  showInfo: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -42,6 +48,8 @@ vi.mock('@/api/admin', () => ({
       batchRefresh: vi.fn(),
       probeUpstreamBilling,
       probeUpstreamBillingBatch,
+      probeModelDegradationBatch,
+      getModelDegradationSnapshots,
       toggleSchedulable: vi.fn()
     },
     proxies: {
@@ -57,7 +65,7 @@ vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
     showSuccess,
-    showInfo: vi.fn()
+    showInfo
   })
 }))
 
@@ -86,6 +94,7 @@ const DataTableStub = {
         <div data-test="select-row"><slot name="cell-select" :row="row" /></div>
         <slot name="cell-created_at" :value="row.created_at" :row="row" />
         <div data-test="account-rate"><slot name="cell-rate_multiplier" :row="row" /></div>
+        <div data-test="model-degradation"><slot name="cell-model_degradation" :row="row" /></div>
       </div>
     </div>
   `
@@ -105,11 +114,12 @@ const ProbeDataTableStub = {
 
 const AccountBulkActionsBarStub = {
   props: ['selectedIds'],
-  emits: ['edit-filtered', 'probe-upstream-billing'],
+  emits: ['edit-filtered', 'probe-upstream-billing', 'probe-model-degradation'],
   template: `
     <div>
       <button data-test="edit-filtered" @click="$emit('edit-filtered')">edit filtered</button>
       <button data-test="probe-upstream-billing" @click="$emit('probe-upstream-billing')">probe</button>
+      <button data-test="probe-model-degradation" @click="$emit('probe-model-degradation')">degradation</button>
     </div>
   `
 }
@@ -139,6 +149,9 @@ describe('admin AccountsView bulk edit scope', () => {
     probeUpstreamBillingBatch.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
+    showInfo.mockReset()
+    probeModelDegradationBatch.mockReset()
+    getModelDegradationSnapshots.mockReset()
 
     listAccounts.mockResolvedValue({
       items: [],
@@ -407,6 +420,100 @@ describe('admin AccountsView bulk edit scope', () => {
     await flushPromises()
 
     expect(probeUpstreamBillingBatch).toHaveBeenCalledWith([7, 11])
+  })
+
+  it('queues a batch degradation check and patches rows as results arrive', async () => {
+    const account = (id: number) => ({
+      id,
+      name: `account-${id}`,
+      platform: 'openai',
+      type: 'oauth',
+      status: 'active',
+      schedulable: true,
+      created_at: '2026-07-13T00:00:00Z',
+      updated_at: '2026-07-13T00:00:00Z'
+    })
+    listAccounts.mockResolvedValue({ items: [account(7), account(11)], total: 2, page: 1, page_size: 20, pages: 1 })
+    probeModelDegradationBatch.mockResolvedValue({ queued: [7, 11], skipped: [] })
+    const snapshot = (status: string) => ({
+      status,
+      expected_model: 'gpt-6-astra',
+      top_model: status === 'normal' ? 'gpt-6-astra' : 'gpt-6-luna',
+      consecutive_degraded: status === 'degraded' ? 1 : 0,
+      last_attempt_at: new Date(Date.now() + 1000).toISOString(),
+      next_probe_at: ''
+    })
+    getModelDegradationSnapshots
+      .mockResolvedValueOnce([
+        { account_id: 7, snapshot: snapshot('degraded') },
+        { account_id: 11, snapshot: { ...snapshot('normal'), last_attempt_at: '2020-01-01T00:00:00Z' } }
+      ])
+      .mockResolvedValueOnce([{ account_id: 11, snapshot: snapshot('normal') }])
+
+    const wrapper = mount(AccountsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: { template: '<div><slot name="table" /><slot name="pagination" /></div>' },
+          DataTable: DataTableStub,
+          AccountBulkActionsBar: AccountBulkActionsBarStub,
+          AccountTableActions: true,
+          AccountTableFilters: true,
+          AccountActionMenu: true,
+          Pagination: PaginationStub,
+          ConfirmDialog: true,
+          ImportDataModal: true,
+          ReAuthAccountModal: true,
+          AccountTestModal: true,
+          AccountStatsModal: true,
+          ScheduledTestsPanel: true,
+          SyncFromCrsModal: true,
+          TempUnschedStatusModal: true,
+          ErrorPassthroughRulesModal: true,
+          TLSFingerprintProfilesModal: true,
+          CreateAccountModal: true,
+          EditAccountModal: true,
+          BulkEditAccountModal: BulkEditAccountModalStub,
+          PlatformTypeBadge: true,
+          AccountCapacityCell: true,
+          AccountStatusIndicator: true,
+          AccountTodayStatsCell: true,
+          AccountGroupsCell: true,
+          AccountUsageCell: true,
+          HelpTooltip: { template: '<span><slot name="trigger" /></span>' },
+          Icon: true
+        }
+      }
+    })
+    await flushPromises()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      for (const row of wrapper.findAll('[data-test="select-row"] input')) await row.trigger('change')
+      await wrapper.get('[data-test="probe-model-degradation"]').trigger('click')
+      await flushPromises()
+
+      expect(probeModelDegradationBatch).toHaveBeenCalledWith([7, 11])
+      expect(showInfo).toHaveBeenCalledWith('admin.accounts.modelDegradation.batchQueued')
+      const statuses = () => wrapper.findAll('[data-testid="model-degradation-status"]').map(node => node.text())
+      expect(statuses()).toEqual(['admin.accounts.modelDegradation.disabled', 'admin.accounts.modelDegradation.disabled'])
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      await flushPromises()
+      expect(getModelDegradationSnapshots).toHaveBeenLastCalledWith([7, 11])
+      expect(statuses()).toEqual(['admin.accounts.modelDegradation.degraded', 'admin.accounts.modelDegradation.disabled'])
+      expect(showSuccess).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      await flushPromises()
+      expect(getModelDegradationSnapshots).toHaveBeenLastCalledWith([11])
+      expect(statuses()).toEqual(['admin.accounts.modelDegradation.degraded', 'admin.accounts.modelDegradation.normal'])
+      expect(showSuccess).toHaveBeenCalledWith('admin.accounts.modelDegradation.batchFinished')
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(getModelDegradationSnapshots).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('updates the current page locally after a batch probe', async () => {

@@ -48,6 +48,7 @@
         <button @click="$emit('reset-status')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.resetStatus') }}</button>
         <button @click="$emit('refresh-token')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.refreshToken') }}</button>
         <button @click="$emit('probe-upstream-billing')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.probeUpstreamBilling') }}</button>
+        <button @click="$emit('probe-model-degradation')" class="btn btn-secondary btn-sm" data-testid="bulk-probe-model-degradation">{{ t('admin.accounts.bulkActions.probeModelDegradation') }}</button>
         <button @click="$emit('toggle-schedulable', true)" class="btn btn-success btn-sm">{{ t('admin.accounts.bulkActions.enableScheduling') }}</button>
         <button @click="$emit('toggle-schedulable', false)" class="btn btn-warning btn-sm">{{ t('admin.accounts.bulkActions.disableScheduling') }}</button>
         <button @click="$emit('edit-selected')" class="btn btn-primary btn-sm">{{ t('admin.accounts.bulkActions.edit') }}</button>
@@ -79,7 +80,8 @@ defineEmits([
   'toggle-schedulable',
   'reset-status',
   'refresh-token',
-  'probe-upstream-billing'
+  'probe-upstream-billing',
+  'probe-model-degradation'
 ])
 
 const { t } = useI18n()

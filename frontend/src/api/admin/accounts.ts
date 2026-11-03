@@ -24,6 +24,9 @@ import type {
   CheckMixedChannelRequest,
   CheckMixedChannelResponse,
   UpstreamBillingProbeResult,
+  ModelDegradationProbeResult,
+  ModelDegradationProbeBatchResult,
+  ModelDegradationProbeSnapshotItem,
   UpstreamBillingProbeSettings,
   UpstreamBillingRatesResponse,
   OllamaCloudUsageSettings,
@@ -1050,6 +1053,33 @@ export async function probeUpstreamBilling(id: number): Promise<UpstreamBillingP
   return data
 }
 
+// 一次检测要等模型生成约 300 个整数，耗时明显长于普通请求。
+export async function probeModelDegradation(id: number): Promise<ModelDegradationProbeResult> {
+  const { data } = await apiClient.post<ModelDegradationProbeResult>(
+    `/admin/accounts/${id}/model-degradation-probe`,
+    undefined,
+    { timeout: 330_000 }
+  )
+  return data
+}
+
+// 批量检测只负责提交，检测在后台执行，结果通过 getModelDegradationSnapshots 轮询。
+export async function probeModelDegradationBatch(accountIds: number[]): Promise<ModelDegradationProbeBatchResult> {
+  const { data } = await apiClient.post<ModelDegradationProbeBatchResult>(
+    '/admin/accounts/model-degradation-probe/batch',
+    { account_ids: accountIds }
+  )
+  return data
+}
+
+export async function getModelDegradationSnapshots(accountIds: number[]): Promise<ModelDegradationProbeSnapshotItem[]> {
+  const { data } = await apiClient.post<{ items: ModelDegradationProbeSnapshotItem[] }>(
+    '/admin/accounts/model-degradation-probe/snapshots',
+    { account_ids: accountIds }
+  )
+  return data.items
+}
+
 export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<UpstreamBillingProbeResult[]> {
   const { data } = await apiClient.post<{ results: UpstreamBillingProbeResult[] }>(
     '/admin/accounts/upstream-billing-probe/batch',
@@ -1191,6 +1221,9 @@ export const accountsAPI = {
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
+  probeModelDegradation,
+  probeModelDegradationBatch,
+  getModelDegradationSnapshots,
   getOllamaCloudUsageSettings,
   updateOllamaCloudUsageSettings,
   getOllamaCloudUsage,

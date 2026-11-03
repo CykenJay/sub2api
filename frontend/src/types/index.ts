@@ -1118,6 +1118,41 @@ export interface UpstreamBillingProbeSnapshot {
   synced_rate_multiplier?: number
 }
 
+export type ModelDegradationProbeStatus = 'normal' | 'degraded' | 'failed'
+
+export interface ModelDegradationProbeSnapshot {
+  status: ModelDegradationProbeStatus
+  expected_model: string
+  top_model?: string
+  top_probability?: number
+  expected_probability?: number
+  candidates?: { model: string; probability: number }[]
+  parsed_numbers?: number
+  requested_numbers?: number
+  consecutive_degraded: number
+  paused_until?: string
+  probe_resume_at?: string
+  last_error?: string
+  latency_ms?: number
+  last_attempt_at: string
+  next_probe_at: string
+}
+
+export interface ModelDegradationProbeBatchResult {
+  queued: number[]
+  skipped: { account_id: number; reason: 'not_found' | 'unsupported' }[]
+}
+
+export interface ModelDegradationProbeSnapshotItem {
+  account_id: number
+  snapshot: ModelDegradationProbeSnapshot | null
+}
+
+export interface ModelDegradationProbeResult {
+  account_id: number
+  snapshot?: ModelDegradationProbeSnapshot | null
+}
+
 export interface UpstreamBillingProbeSettings {
   enabled: boolean
   interval_minutes: number
@@ -1283,6 +1318,11 @@ export interface Account {
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
+    model_degradation_probe_interval_minutes?: number
+    model_degradation_probe_pause_threshold?: number
+    model_degradation_probe_pause_minutes?: number
+    model_degradation_probe_cooldown_minutes?: number
+    model_degradation_probe?: ModelDegradationProbeSnapshot
     codex_reset_credit_snapshot?: {
       available_count?: number
       credits?: { expires_at?: string }[]
