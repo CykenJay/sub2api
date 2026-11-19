@@ -595,7 +595,7 @@ func capacityShedTempUnschedAccount() *Account {
 		Credentials: map[string]any{
 			"temp_unschedulable_enabled": true,
 			"temp_unschedulable_rules": []any{
-				map[string]any{"error_code": float64(503), "keywords": []any{"overloaded"}, "duration_minutes": float64(5)},
+				map[string]any{"error_code": float64(503), "keywords": []any{"overloaded"}, "duration_minutes": float64(5), "scope": TempUnschedScopeModel},
 			},
 		},
 	}
