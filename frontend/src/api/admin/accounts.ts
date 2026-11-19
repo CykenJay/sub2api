@@ -27,6 +27,7 @@ import type {
   ModelDegradationProbeResult,
   ModelDegradationProbeBatchResult,
   ModelDegradationProbeSnapshotItem,
+  ModelDegradationProbeModels,
   UpstreamBillingProbeSettings,
   UpstreamBillingRatesResponse,
   OllamaCloudUsageSettings,
@@ -1054,12 +1055,27 @@ export async function probeUpstreamBilling(id: number): Promise<UpstreamBillingP
 }
 
 // 一次检测要等模型生成约 300 个整数，耗时明显长于普通请求。
+// 后端单次请求最长 5 分钟，两条样本并发，失败后共可原地重试 3 次，最长串行 4 次请求，超时需覆盖全部尝试。
+const MODEL_DEGRADATION_PROBE_TIMEOUT_MS = 4 * 300_000 + 30_000
+
 export async function probeModelDegradation(id: number): Promise<ModelDegradationProbeResult> {
   const { data } = await apiClient.post<ModelDegradationProbeResult>(
     `/admin/accounts/${id}/model-degradation-probe`,
     undefined,
-    { timeout: 330_000 }
+    { timeout: MODEL_DEGRADATION_PROBE_TIMEOUT_MS }
   )
+  return data
+}
+
+// 可选的降智检测模型，即后端指纹库收录的模型。
+export async function getModelDegradationProbeModels(): Promise<ModelDegradationProbeModels> {
+  const { data } = await apiClient.get<ModelDegradationProbeModels>('/admin/accounts/model-degradation-probe/models')
+  return data
+}
+
+// 只切换「降智后暂停调度」开关；关闭时若账号正被降智检测暂停，后端会立即恢复调度（resumed=true）。
+export async function setModelDegradationPauseEnabled(id: number, enabled: boolean): Promise<{ resumed: boolean }> {
+  const { data } = await apiClient.put<{ resumed: boolean }>(`/admin/accounts/${id}/model-degradation-probe/pause`, { enabled })
   return data
 }
 
@@ -1222,6 +1238,8 @@ export const accountsAPI = {
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
   probeModelDegradation,
+  getModelDegradationProbeModels,
+  setModelDegradationPauseEnabled,
   probeModelDegradationBatch,
   getModelDegradationSnapshots,
   getOllamaCloudUsageSettings,

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import {
   BUILTIN_PLATFORM_CATALOG,
   resetPlatformCatalog,
@@ -1040,6 +1040,32 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toBeDefined()
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('upstream_request_id_header')
+  })
+
+  it('keeps the selected degradation probe model and removes it when reset to default', async () => {
+    const account = buildAccount()
+    account.extra = { model_degradation_probe_model: 'gpt-6-luna', model_degradation_probe_interval_minutes: 30 }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const untouched = mountModal(account)
+    await flushPromises()
+    const select = untouched.get('[data-testid="model-degradation-model"]')
+    expect((select.element as HTMLSelectElement).value).toBe('gpt-6-luna')
+    await untouched.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      model_degradation_probe_model: 'gpt-6-luna',
+      model_degradation_probe_interval_minutes: 30
+    })
+
+    updateAccountMock.mockClear()
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('[data-testid="model-degradation-model"]').setValue('')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('model_degradation_probe_model')
   })
 
   it('writes images_url_to_b64_json into extra when toggled on', async () => {

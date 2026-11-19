@@ -14,6 +14,17 @@ func (h *AccountHandler) SetModelDegradationProbeService(probe *service.ModelDeg
 	h.modelDegradationProbe = probe
 }
 
+// GetModelDegradationProbeModels lists the models that can be selected for degradation probes.
+// GET /api/v1/admin/accounts/model-degradation-probe/models
+func (h *AccountHandler) GetModelDegradationProbeModels(c *gin.Context) {
+	models, err := service.ModelDegradationProbeModels()
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"models": models, "default_model": service.ModelDegradationProbeDefaultModel})
+}
+
 // ProbeModelDegradation runs one model degradation probe immediately.
 // POST /api/v1/admin/accounts/:id/model-degradation-probe
 func (h *AccountHandler) ProbeModelDegradation(c *gin.Context) {
@@ -32,6 +43,35 @@ func (h *AccountHandler) ProbeModelDegradation(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"account_id": accountID, "snapshot": snapshot})
+}
+
+type modelDegradationProbePauseRequest struct {
+	Enabled *bool `json:"enabled" binding:"required"`
+}
+
+// SetModelDegradationProbePauseEnabled toggles whether a degraded account is paused from scheduling.
+// PUT /api/v1/admin/accounts/:id/model-degradation-probe/pause
+func (h *AccountHandler) SetModelDegradationProbePauseEnabled(c *gin.Context) {
+	if h.modelDegradationProbe == nil {
+		response.ErrorFrom(c, service.ErrModelDegradationProbeUnavailable)
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req modelDegradationProbePauseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	resumed, err := h.modelDegradationProbe.SetPauseEnabled(c.Request.Context(), accountID, *req.Enabled)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"account_id": accountID, "enabled": *req.Enabled, "resumed": resumed})
 }
 
 type modelDegradationProbeBatchRequest struct {

@@ -21,12 +21,18 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// 模型降智检测：按账号配置的间隔，用 ModelTrace 数字指纹挑战请求 gpt-6-astra，
-// 指纹第一候选不是 gpt-6-astra 即视为疑似降智。配置与结果都存放在 accounts.extra。
+// 模型降智检测：按账号配置的间隔，用 ModelTrace 数字指纹挑战请求账号选定的检测模型
+// （默认 gpt-6-astra，必须收录在指纹库中）。每次检测并发采集两条回答合并评分，第一候选
+// 概率达到 98% 才是有效结论：第一候选不是检测模型即视为疑似降智，置信度不足按检测失败处理。
+// 检测失败时立即原地重试。配置与结果都存放在 accounts.extra。
 const (
+	// ModelDegradationProbeModelExtraKey 检测的模型，必须收录在指纹库中；缺省或空表示 ModelDegradationProbeDefaultModel。
+	ModelDegradationProbeModelExtraKey = "model_degradation_probe_model"
 	// ModelDegradationProbeIntervalExtraKey 检测间隔（分钟），0 或缺省表示不检测。
 	ModelDegradationProbeIntervalExtraKey = "model_degradation_probe_interval_minutes"
-	// ModelDegradationProbePauseThresholdExtraKey 连续疑似降智多少次后暂停调度，0 表示仅展示。
+	// ModelDegradationProbePauseEnabledExtraKey 疑似降智后是否暂停调度；缺省时按阈值是否大于 0 判断（兼容旧配置）。
+	ModelDegradationProbePauseEnabledExtraKey = "model_degradation_probe_pause_enabled"
+	// ModelDegradationProbePauseThresholdExtraKey 连续疑似降智多少次后暂停调度，开启暂停时 0 按 1 处理。
 	ModelDegradationProbePauseThresholdExtraKey = "model_degradation_probe_pause_threshold"
 	// ModelDegradationProbePauseMinutesExtraKey 达到阈值后临时不可调度的时长（分钟），0 时取默认值。
 	ModelDegradationProbePauseMinutesExtraKey = "model_degradation_probe_pause_minutes"
@@ -35,13 +41,20 @@ const (
 	// ModelDegradationProbeExtraKey 最近一次检测结果快照，仅由检测服务写入。
 	ModelDegradationProbeExtraKey = "model_degradation_probe"
 
-	ModelDegradationProbeExpectedModel = "gpt-6-astra"
+	// ModelDegradationProbeDefaultModel 未选择检测模型时使用的默认模型。
+	ModelDegradationProbeDefaultModel = "gpt-6-astra"
 
 	ModelDegradationProbeMaxIntervalMinutes  = 7 * 24 * 60
 	ModelDegradationProbeMaxPauseThreshold   = 100
 	ModelDegradationProbeMaxPauseMinutes     = 7 * 24 * 60
 	ModelDegradationProbeMaxCooldownMinutes  = 7 * 24 * 60
 	ModelDegradationProbeDefaultPauseMinutes = 60
+	// ModelDegradationProbeMinConfidence 指纹第一候选概率低于该值时结论无效，按检测失败处理。
+	ModelDegradationProbeMinConfidence = 0.98
+	// ModelDegradationProbeSamples 每轮并发采集的指纹回答条数，合并评分得出一个结论。
+	ModelDegradationProbeSamples = 2
+	// ModelDegradationProbeMaxRetries 一次检测内失败后立即原地重试的总次数（单条重试与整轮重来共用）。
+	ModelDegradationProbeMaxRetries = 3
 
 	ModelDegradationProbeStatusNormal   = "normal"
 	ModelDegradationProbeStatusDegraded = "degraded"
@@ -54,9 +67,10 @@ const (
 	modelDegradationProbeTopCandidates  = 3
 	modelDegradationProbeMaxErrorLength = 300
 	// 暂停原因里的标记，标明临时不可调度来自降智检测。
-	modelDegradationProbePauseMarker   = "model_degradation_probe"
-	modelDegradationProbeLeaderLock    = "model:degradation:probe:leader"
-	modelDegradationProbeLeaderLockTTL = 10 * time.Minute
+	modelDegradationProbePauseMarker = "model_degradation_probe"
+	modelDegradationProbeLeaderLock  = "model:degradation:probe:leader"
+	// 一轮检测最坏要等每次尝试都超时（同轮样本并发），锁 TTL 需覆盖全部重试，避免多实例重复检测。
+	modelDegradationProbeLeaderLockTTL = (ModelDegradationProbeMaxRetries+1)*modelDegradationProbeRequestTimeout + 10*time.Minute
 )
 
 var (
@@ -90,9 +104,11 @@ type ModelDegradationProbeSnapshot struct {
 	// ProbeResumeAt 是疑似降智后停止自动检测的截止时间。
 	ProbeResumeAt *time.Time `json:"probe_resume_at,omitempty"`
 	LastError     string     `json:"last_error,omitempty"`
-	LatencyMs     int64      `json:"latency_ms,omitempty"`
-	LastAttemptAt time.Time  `json:"last_attempt_at"`
-	NextProbeAt   time.Time  `json:"next_probe_at"`
+	// Attempts 是本次检测实际发出的请求总数（含并发采样与失败后的原地重试）。
+	Attempts      int       `json:"attempts,omitempty"`
+	LatencyMs     int64     `json:"latency_ms,omitempty"`
+	LastAttemptAt time.Time `json:"last_attempt_at"`
+	NextProbeAt   time.Time `json:"next_probe_at"`
 }
 
 // ModelDegradationProbeCandidateRow 是到期筛选所需的最小账号信息。
@@ -111,6 +127,26 @@ type modelDegradationProbeTester interface {
 
 type modelDegradationProbePauser interface {
 	PauseAccountTempUnschedulable(ctx context.Context, account *Account, until time.Time, reason, source string) error
+	ResumeAccountFromTempUnschedulable(ctx context.Context, accountID int64) error
+}
+
+// ModelDegradationProbeModel 返回账号选定的检测模型，未选择时为默认模型。
+func ModelDegradationProbeModel(account *Account) string {
+	if account != nil {
+		if model, ok := account.Extra[ModelDegradationProbeModelExtraKey].(string); ok && strings.TrimSpace(model) != "" {
+			return strings.TrimSpace(model)
+		}
+	}
+	return ModelDegradationProbeDefaultModel
+}
+
+// ModelDegradationProbeModels 返回可选的检测模型，即指纹库收录的全部模型。
+func ModelDegradationProbeModels() ([]string, error) {
+	bank, err := modeltrace.DefaultBank()
+	if err != nil {
+		return nil, err
+	}
+	return bank.ModelIDs(), nil
 }
 
 // ModelDegradationProbeIntervalMinutes 返回账号配置的检测间隔，非法值视为 0。
@@ -121,11 +157,29 @@ func ModelDegradationProbeIntervalMinutes(account *Account) int {
 	return clampModelDegradationProbeSetting(account.getExtraInt(ModelDegradationProbeIntervalExtraKey), ModelDegradationProbeMaxIntervalMinutes)
 }
 
-// ModelDegradationProbePauseThreshold 返回连续疑似降智后暂停调度的阈值，0 表示仅展示。
-func ModelDegradationProbePauseThreshold(account *Account) int {
+// ModelDegradationProbePauseEnabled 报告疑似降智后是否暂停调度。未显式设置时沿用旧语义：阈值大于 0 即开启。
+func ModelDegradationProbePauseEnabled(account *Account) bool {
 	if account == nil {
+		return false
+	}
+	if enabled, ok := account.Extra[ModelDegradationProbePauseEnabledExtraKey].(bool); ok {
+		return enabled
+	}
+	return modelDegradationProbeRawPauseThreshold(account) > 0
+}
+
+// ModelDegradationProbePauseThreshold 返回连续疑似降智后暂停调度的阈值，0 表示不暂停。
+func ModelDegradationProbePauseThreshold(account *Account) int {
+	if !ModelDegradationProbePauseEnabled(account) {
 		return 0
 	}
+	if threshold := modelDegradationProbeRawPauseThreshold(account); threshold > 0 {
+		return threshold
+	}
+	return 1
+}
+
+func modelDegradationProbeRawPauseThreshold(account *Account) int {
 	return clampModelDegradationProbeSetting(account.getExtraInt(ModelDegradationProbePauseThresholdExtraKey), ModelDegradationProbeMaxPauseThreshold)
 }
 
@@ -175,6 +229,28 @@ func ValidateModelDegradationProbeExtra(extra map[string]any) error {
 		{ModelDegradationProbePauseThresholdExtraKey, ModelDegradationProbeMaxPauseThreshold},
 		{ModelDegradationProbePauseMinutesExtraKey, ModelDegradationProbeMaxPauseMinutes},
 		{ModelDegradationProbeCooldownMinutesExtraKey, ModelDegradationProbeMaxCooldownMinutes},
+	}
+	if raw, ok := extra[ModelDegradationProbeModelExtraKey]; ok && raw != nil {
+		model, valid := raw.(string)
+		if !valid {
+			return fmt.Errorf("%s must be a string", ModelDegradationProbeModelExtraKey)
+		}
+		model = strings.TrimSpace(model)
+		if model != "" {
+			bank, err := modeltrace.DefaultBank()
+			if err != nil {
+				return fmt.Errorf("load model fingerprint bank: %w", err)
+			}
+			if !bank.HasModel(model) {
+				return fmt.Errorf("%s %q is not in the model fingerprint bank", ModelDegradationProbeModelExtraKey, model)
+			}
+		}
+		extra[ModelDegradationProbeModelExtraKey] = model
+	}
+	if raw, ok := extra[ModelDegradationProbePauseEnabledExtraKey]; ok && raw != nil {
+		if _, valid := raw.(bool); !valid {
+			return fmt.Errorf("%s must be a boolean", ModelDegradationProbePauseEnabledExtraKey)
+		}
 	}
 	for _, check := range checks {
 		raw, ok := extra[check.key]
@@ -449,6 +525,52 @@ func (s *ModelDegradationProbeService) ProbeAccount(ctx context.Context, account
 	return s.probe(ctx, accountID, false)
 }
 
+// SetPauseEnabled 切换账号的「降智后暂停调度」开关。关闭时若账号正处于本检测设置的临时不可调度，
+// 立即解除并恢复调度；其他原因造成的临时不可调度保持不变。返回是否解除了暂停。
+func (s *ModelDegradationProbeService) SetPauseEnabled(ctx context.Context, accountID int64, enabled bool) (bool, error) {
+	if s == nil || s.accountRepo == nil {
+		return false, ErrModelDegradationProbeUnavailable
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+	if !IsModelDegradationProbeAccount(account) {
+		return false, ErrModelDegradationProbeAccountInvalid
+	}
+	updates := map[string]any{ModelDegradationProbePauseEnabledExtraKey: enabled}
+	resumed := false
+	if !enabled && isModelDegradationProbePauseActive(account, s.currentTime()) {
+		if s.pauser == nil {
+			return false, ErrModelDegradationProbeUnavailable
+		}
+		if err := s.pauser.ResumeAccountFromTempUnschedulable(ctx, accountID); err != nil {
+			return false, fmt.Errorf("resume account from model degradation pause: %w", err)
+		}
+		resumed = true
+		if snapshot := DecodeModelDegradationProbeSnapshot(account.Extra); snapshot != nil {
+			snapshot.PausedUntil = nil
+			updates[ModelDegradationProbeExtraKey] = snapshot
+		}
+	}
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
+		return resumed, err
+	}
+	return resumed, nil
+}
+
+// isModelDegradationProbePauseActive 报告账号当前的临时不可调度是否由降智检测设置且尚未到期。
+func isModelDegradationProbePauseActive(account *Account, now time.Time) bool {
+	if account == nil || account.TempUnschedulableUntil == nil || !account.TempUnschedulableUntil.After(now) {
+		return false
+	}
+	var state TempUnschedState
+	if err := json.Unmarshal([]byte(account.TempUnschedulableReason), &state); err != nil {
+		return false
+	}
+	return state.MatchedKeyword == modelDegradationProbePauseMarker
+}
+
 // ModelDegradationProbeMaxBatchSize 限制一次手动批量检测提交的账号数。
 const ModelDegradationProbeMaxBatchSize = 200
 
@@ -569,17 +691,25 @@ func (s *ModelDegradationProbeService) probeLoadedAccount(ctx context.Context, a
 	previous := DecodeModelDegradationProbeSnapshot(account.Extra)
 	startedAt := s.currentTime().UTC()
 	snapshot := &ModelDegradationProbeSnapshot{
-		ExpectedModel: ModelDegradationProbeExpectedModel,
+		ExpectedModel: ModelDegradationProbeModel(account),
 		LastAttemptAt: startedAt,
 	}
 	if previous != nil {
-		snapshot.ConsecutiveDegraded = previous.ConsecutiveDegraded
+		// 切换检测模型后，之前累计的是另一个模型的结果，连续计数重新开始。
+		// 未记录检测模型的快照按默认模型处理。
+		previousModel := previous.ExpectedModel
+		if previousModel == "" {
+			previousModel = ModelDegradationProbeDefaultModel
+		}
+		if previousModel == snapshot.ExpectedModel {
+			snapshot.ConsecutiveDegraded = previous.ConsecutiveDegraded
+		}
 		if previous.PausedUntil != nil && previous.PausedUntil.After(startedAt) {
 			snapshot.PausedUntil = previous.PausedUntil
 		}
 	}
 
-	s.runChallenge(ctx, account, snapshot)
+	s.runChallengeWithRetry(ctx, account, snapshot)
 
 	switch snapshot.Status {
 	case ModelDegradationProbeStatusNormal:
@@ -625,53 +755,185 @@ func (s *ModelDegradationProbeService) pauseIfThresholdReached(ctx context.Conte
 	snapshot.PausedUntil = &until
 }
 
-// runChallenge 发送一条指纹挑战并填写快照的检测结果字段。
-func (s *ModelDegradationProbeService) runChallenge(ctx context.Context, account *Account, snapshot *ModelDegradationProbeSnapshot) {
-	fail := func(message string) {
-		snapshot.Status = ModelDegradationProbeStatusFailed
-		snapshot.LastError = truncateModelDegradationProbeError(message)
-	}
+// runChallengeWithRetry 并发发送 ModelDegradationProbeSamples 条指纹挑战，合并评分得出一个结论。
+// 单条回答失败（请求出错、回答不完整、有效数字不足）只重试该条，已拿到的有效回答保留；
+// 合并后置信度不足则整轮重新采样。两种重试共用 ModelDegradationProbeMaxRetries 次预算，
+// 指纹库不可用或请求已取消时直接结束。
+func (s *ModelDegradationProbeService) runChallengeWithRetry(ctx context.Context, account *Account, snapshot *ModelDegradationProbeSnapshot) {
 	bank, err := s.bank()
+	if err == nil && !bank.HasModel(snapshot.ExpectedModel) {
+		// 指纹库更换后已保存的检测模型可能不再收录，直接失败而不是改测其他模型。
+		err = fmt.Errorf("model %s is not in the model fingerprint bank", snapshot.ExpectedModel)
+	}
 	if err != nil {
-		fail(err.Error())
+		snapshot.Status = ModelDegradationProbeStatusFailed
+		snapshot.LastError = truncateModelDegradationProbeError(err.Error())
 		return
 	}
-	challenge := s.challenge()
-	snapshot.RequestedNumbers = challenge.ExpectedCount
+	run := &modelDegradationProbeRun{retries: ModelDegradationProbeMaxRetries}
+	for {
+		samples, sampleErr := s.collectProbeSamples(ctx, account, snapshot.ExpectedModel, bank, run)
+		resetModelDegradationProbeResult(snapshot)
+		snapshot.Attempts = run.attempts
+		snapshot.LatencyMs = run.latencyMs
+		if sampleErr != "" {
+			snapshot.Status = ModelDegradationProbeStatusFailed
+			snapshot.LastError = truncateModelDegradationProbeError(sampleErr)
+			return
+		}
+		applyModelDegradationProbeAnalysis(bank, samples, snapshot)
+		if snapshot.Status != ModelDegradationProbeStatusFailed || ctx.Err() != nil || !run.takeRetry() {
+			return
+		}
+		slog.Info("model_degradation_probe_retry",
+			"account_id", account.ID, "attempts", run.attempts, "scope", "round", "error", snapshot.LastError)
+	}
+}
 
+// modelDegradationProbeRun 记录一次检测内所有尝试共用的重试预算与统计。
+type modelDegradationProbeRun struct {
+	mu        sync.Mutex
+	retries   int
+	attempts  int
+	latencyMs int64
+}
+
+func (r *modelDegradationProbeRun) takeRetry() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retries <= 0 {
+		return false
+	}
+	r.retries--
+	return true
+}
+
+func (r *modelDegradationProbeRun) recordAttempt(latencyMs int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.attempts++
+	if latencyMs > r.latencyMs {
+		r.latencyMs = latencyMs
+	}
+}
+
+// modelDegradationProbeSample 是一条有效的指纹回答。
+type modelDegradationProbeSample struct {
+	output modeltrace.Output
+	parsed int
+}
+
+// collectProbeSamples 并发采集一轮样本，每条各自重试直到有效或预算耗尽。
+// 任一条最终失败时返回其失败原因。
+func (s *ModelDegradationProbeService) collectProbeSamples(ctx context.Context, account *Account, model string, bank *modeltrace.Bank, run *modelDegradationProbeRun) ([]modelDegradationProbeSample, string) {
+	samples := make([]modelDegradationProbeSample, ModelDegradationProbeSamples)
+	errs := make([]string, ModelDegradationProbeSamples)
+	var wg sync.WaitGroup
+	for i := range samples {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for {
+				sample, failure := s.requestProbeSample(ctx, account, model, bank, run)
+				if failure == "" {
+					samples[i] = sample
+					return
+				}
+				errs[i] = failure
+				if ctx.Err() != nil || !run.takeRetry() {
+					return
+				}
+				slog.Info("model_degradation_probe_retry",
+					"account_id", account.ID, "sample", i+1, "scope", "sample", "error", failure)
+			}
+		}(i)
+	}
+	wg.Wait()
+	for i, failure := range errs {
+		if samples[i].parsed == 0 && failure != "" {
+			return nil, failure
+		}
+	}
+	return samples, ""
+}
+
+// requestProbeSample 发送一条指纹挑战，回答有效时返回样本，否则返回失败原因。
+func (s *ModelDegradationProbeService) requestProbeSample(ctx context.Context, account *Account, model string, bank *modeltrace.Bank, run *modelDegradationProbeRun) (modelDegradationProbeSample, string) {
+	challenge := s.challenge()
 	probeCtx, cancel := context.WithTimeout(ctx, modelDegradationProbeRequestTimeout)
 	defer cancel()
-	result, err := s.tester.RunTestBackgroundWithPrompt(probeCtx, account.ID, ModelDegradationProbeExpectedModel, challenge.Prompt)
+	result, err := s.tester.RunTestBackgroundWithPrompt(probeCtx, account.ID, model, challenge.Prompt)
 	if err != nil {
-		fail(err.Error())
-		return
+		run.recordAttempt(0)
+		return modelDegradationProbeSample{}, err.Error()
 	}
-	snapshot.LatencyMs = result.LatencyMs
+	run.recordAttempt(result.LatencyMs)
 	if result.Status != "success" {
-		fail(result.ErrorMessage)
-		return
+		return modelDegradationProbeSample{}, result.ErrorMessage
 	}
+	output := modeltrace.Output{Text: result.ResponseText, ExpectedCount: challenge.ExpectedCount}
+	parsed := len(modeltrace.ParseNumbers(result.ResponseText))
+	if _, err := bank.Analyze([]modeltrace.Output{output}); err != nil {
+		return modelDegradationProbeSample{}, fmt.Sprintf("valid numbers %d/%d", parsed, modeltrace.MinimumNumbers(challenge.ExpectedCount))
+	}
+	return modelDegradationProbeSample{output: output, parsed: parsed}, ""
+}
 
-	analysis, err := bank.Analyze([]modeltrace.Output{{Text: result.ResponseText, ExpectedCount: challenge.ExpectedCount}})
-	snapshot.ParsedNumbers = len(modeltrace.ParseNumbers(result.ResponseText))
+// resetModelDegradationProbeResult 清空上一轮留下的检测结果字段。
+func resetModelDegradationProbeResult(snapshot *ModelDegradationProbeSnapshot) {
+	snapshot.Status = ""
+	snapshot.TopModel = ""
+	snapshot.TopProbability = 0
+	snapshot.ExpectedProbability = 0
+	snapshot.Candidates = nil
+	snapshot.ParsedNumbers = 0
+	snapshot.RequestedNumbers = 0
+	snapshot.LastError = ""
+}
+
+// applyModelDegradationProbeAnalysis 合并评分本轮样本并填写快照的检测结果字段。
+// 有效数字展示取本轮最少的那条。
+func applyModelDegradationProbeAnalysis(bank *modeltrace.Bank, samples []modelDegradationProbeSample, snapshot *ModelDegradationProbeSnapshot) {
+	outputs := make([]modeltrace.Output, 0, len(samples))
+	for i, sample := range samples {
+		outputs = append(outputs, sample.output)
+		if i == 0 || sample.parsed < snapshot.ParsedNumbers {
+			snapshot.ParsedNumbers = sample.parsed
+			snapshot.RequestedNumbers = sample.output.ExpectedCount
+		}
+	}
+	analysis, err := bank.Analyze(outputs)
 	if err != nil {
-		fail(fmt.Sprintf("valid numbers %d/%d", snapshot.ParsedNumbers, modeltrace.MinimumNumbers(challenge.ExpectedCount)))
+		snapshot.Status = ModelDegradationProbeStatusFailed
+		snapshot.LastError = truncateModelDegradationProbeError(err.Error())
 		return
 	}
 	top := analysis.Top()
 	snapshot.TopModel = top.Model
 	snapshot.TopProbability = top.Probability
-	snapshot.ExpectedProbability = analysis.ProbabilityOf(ModelDegradationProbeExpectedModel)
+	snapshot.ExpectedProbability = analysis.ProbabilityOf(snapshot.ExpectedModel)
 	for i := 0; i < len(analysis.Candidates) && i < modelDegradationProbeTopCandidates; i++ {
 		snapshot.Candidates = append(snapshot.Candidates, ModelDegradationProbeCandidate{
 			Model:       analysis.Candidates[i].Model,
 			Probability: analysis.Candidates[i].Probability,
 		})
 	}
-	if top.Model == ModelDegradationProbeExpectedModel {
-		snapshot.Status = ModelDegradationProbeStatusNormal
-	} else {
-		snapshot.Status = ModelDegradationProbeStatusDegraded
+	snapshot.Status = modelDegradationProbeVerdict(snapshot.ExpectedModel, top.Model, top.Probability)
+	if snapshot.Status == ModelDegradationProbeStatusFailed {
+		snapshot.LastError = fmt.Sprintf("low confidence: top candidate %s %.1f%% < %.0f%%",
+			top.Model, top.Probability*100, ModelDegradationProbeMinConfidence*100)
+	}
+}
+
+// modelDegradationProbeVerdict 按指纹第一候选给出结论，置信度不足时结论无效。
+func modelDegradationProbeVerdict(expectedModel, topModel string, topProbability float64) string {
+	switch {
+	case topProbability < ModelDegradationProbeMinConfidence:
+		return ModelDegradationProbeStatusFailed
+	case topModel == expectedModel:
+		return ModelDegradationProbeStatusNormal
+	default:
+		return ModelDegradationProbeStatusDegraded
 	}
 }
 

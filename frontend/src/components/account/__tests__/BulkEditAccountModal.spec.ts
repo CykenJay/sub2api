@@ -29,7 +29,11 @@ vi.mock('@/api/admin', () => ({
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn()
+  getAntigravityDefaultModelMapping: vi.fn(),
+  getModelDegradationProbeModels: vi.fn().mockResolvedValue({
+    models: ['gpt-6-astra', 'gpt-6-luna', 'gpt-6.2-astra'],
+    default_model: 'gpt-6-astra'
+  })
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -245,6 +249,7 @@ describe('BulkEditAccountModal', () => {
 
     await wrapper.get('#bulk-edit-model-degradation-enabled').setValue(true)
     await wrapper.get('[data-testid="model-degradation-interval"]').setValue('30')
+    await wrapper.get('[data-testid="model-degradation-pause-enabled"]').setValue(true)
     await wrapper.get('[data-testid="model-degradation-pause-threshold"]').setValue('2')
     await wrapper.get('[data-testid="model-degradation-pause-minutes"]').setValue('90')
     await wrapper.get('[data-testid="model-degradation-cooldown"]').setValue('120')
@@ -253,6 +258,8 @@ describe('BulkEditAccountModal', () => {
 
     expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
       extra: {
+        model_degradation_probe_model: '',
+        model_degradation_probe_pause_enabled: true,
         model_degradation_probe_interval_minutes: 30,
         model_degradation_probe_pause_threshold: 2,
         model_degradation_probe_pause_minutes: 90,
@@ -271,12 +278,49 @@ describe('BulkEditAccountModal', () => {
 
     expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
       extra: {
+        model_degradation_probe_model: '',
+        model_degradation_probe_pause_enabled: false,
         model_degradation_probe_interval_minutes: 0,
-        model_degradation_probe_pause_threshold: 0,
+        model_degradation_probe_pause_threshold: 1,
         model_degradation_probe_pause_minutes: 60,
         model_degradation_probe_cooldown_minutes: 0
       }
     })
+  })
+
+  it('批量设置降智检测模型，选项来自指纹库且默认模型只出现一次', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await flushPromises()
+
+    await wrapper.get('#bulk-edit-model-degradation-enabled').setValue(true)
+    const select = wrapper.get('[data-testid="model-degradation-model"]')
+    expect(select.findAll('option').map((option) => option.attributes('value'))).toEqual(['', 'gpt-6-luna', 'gpt-6.2-astra'])
+
+    await select.setValue('gpt-6.2-astra')
+    await wrapper.get('[data-testid="model-degradation-interval"]').setValue('30')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: expect.objectContaining({
+        model_degradation_probe_model: 'gpt-6.2-astra',
+        model_degradation_probe_interval_minutes: 30
+      })
+    })
+  })
+
+  it('未勾选降智后暂停调度时禁用阈值与暂停时长', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+
+    await wrapper.get('#bulk-edit-model-degradation-enabled').setValue(true)
+    const threshold = wrapper.get('[data-testid="model-degradation-pause-threshold"]')
+    const minutes = wrapper.get('[data-testid="model-degradation-pause-minutes"]')
+    expect(threshold.attributes('disabled')).toBeDefined()
+    expect(minutes.attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="model-degradation-pause-enabled"]').setValue(true)
+    expect(threshold.attributes('disabled')).toBeUndefined()
+    expect(minutes.attributes('disabled')).toBeUndefined()
   })
 
   it('非 OpenAI 目标不展示降智检测设置', () => {

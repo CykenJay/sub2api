@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { computeModelDegradationSchedule } from '../modelDegradationProbe'
+import {
+  buildModelDegradationExtra,
+  computeModelDegradationSchedule,
+  readModelDegradationSettings
+} from '../modelDegradationProbe'
 
 const last = '2026-11-03T11:07:00Z'
 const lastMs = Date.parse(last)
@@ -31,5 +35,41 @@ describe('computeModelDegradationSchedule', () => {
   it('未开启检测或没有检测记录时没有下次检测时间', () => {
     expect(computeModelDegradationSchedule(extra('degraded', { model_degradation_probe_cooldown_minutes: 60 })).nextProbeAt).toBeNull()
     expect(computeModelDegradationSchedule({ model_degradation_probe_interval_minutes: 5 })).toEqual({ probeResumeAt: null, nextProbeAt: null })
+  })
+})
+
+describe('降智后暂停调度开关', () => {
+  it('未设置开关时沿用旧语义：阈值大于 0 即开启', () => {
+    expect(readModelDegradationSettings({ model_degradation_probe_pause_threshold: 2 })).toMatchObject({
+      pauseEnabled: true,
+      pauseThreshold: 2
+    })
+    expect(readModelDegradationSettings({})).toMatchObject({ pauseEnabled: false, pauseThreshold: 1 })
+  })
+
+  it('显式关闭时保留阈值，重新勾选可沿用', () => {
+    const settings = readModelDegradationSettings({
+      model_degradation_probe_pause_enabled: false,
+      model_degradation_probe_pause_threshold: 3
+    })
+    expect(settings).toMatchObject({ pauseEnabled: false, pauseThreshold: 3 })
+    expect(buildModelDegradationExtra(settings)).toMatchObject({
+      model_degradation_probe_pause_enabled: false,
+      model_degradation_probe_pause_threshold: 3
+    })
+  })
+})
+
+describe('检测模型设置', () => {
+  it('读取时去掉首尾空白，未设置时为空表示默认模型', () => {
+    expect(readModelDegradationSettings({ model_degradation_probe_model: ' gpt-6-luna ' }).model).toBe('gpt-6-luna')
+    expect(readModelDegradationSettings({}).model).toBe('')
+    expect(readModelDegradationSettings({ model_degradation_probe_model: 42 }).model).toBe('')
+  })
+
+  it('保存时总是写入检测模型，空值用于恢复默认', () => {
+    const settings = readModelDegradationSettings({ model_degradation_probe_model: 'gpt-6-luna' })
+    expect(buildModelDegradationExtra(settings).model_degradation_probe_model).toBe('gpt-6-luna')
+    expect(buildModelDegradationExtra({ ...settings, model: '' }).model_degradation_probe_model).toBe('')
   })
 })

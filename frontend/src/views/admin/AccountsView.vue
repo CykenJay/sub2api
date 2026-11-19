@@ -383,7 +383,9 @@
             <ModelDegradationCell
               :account="row"
               :probing="probingModelDegradation.has(row.id)"
+              :pause-saving="savingModelDegradationPause.has(row.id)"
               @probe="handleProbeModelDegradation(row)"
+              @toggle-pause="(enabled: boolean) => handleToggleModelDegradationPause(row, enabled)"
             />
           </template>
           <template #cell-priority="{ row }">
@@ -633,6 +635,7 @@ const menu = reactive<{show:boolean, acc:Account|null, anchorRect:DOMRect|null}>
 const exportingData = ref(false)
 const probingUpstreamBilling = reactive(new Set<number>())
 const probingModelDegradation = reactive(new Set<number>())
+const savingModelDegradationPause = reactive(new Set<number>())
 const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
 const upstreamBillingNow = ref(Date.now())
 const upstreamBillingRateETag = ref<string | null>(null)
@@ -2319,6 +2322,27 @@ const handleProbeModelDegradation = async (account: Account) => {
     appStore.showError(extractApiErrorMessage(error, t('admin.accounts.modelDegradation.probeFailed')))
   } finally {
     probingModelDegradation.delete(account.id)
+  }
+}
+const handleToggleModelDegradationPause = async (account: Account, enabled: boolean) => {
+  if (savingModelDegradationPause.has(account.id)) return
+  savingModelDegradationPause.add(account.id)
+  try {
+    const { resumed } = await adminAPI.accounts.setModelDegradationPauseEnabled(account.id, enabled)
+    const current = accounts.value.find(item => item.id === account.id) ?? account
+    if (resumed) {
+      // 后端已解除降智检测设置的临时不可调度，重新拉取账号以刷新调度状态。
+      patchAccountInList(await adminAPI.accounts.getById(account.id))
+    } else {
+      patchAccountInList({ ...current, extra: { ...current.extra, model_degradation_probe_pause_enabled: enabled } })
+    }
+    const message = enabled ? 'pauseOn' : resumed ? 'pauseResumed' : 'pauseOff'
+    appStore.showSuccess(t(`admin.accounts.modelDegradation.${message}`))
+  } catch (error) {
+    console.error('Failed to toggle model degradation pause:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.modelDegradation.pauseToggleFailed')))
+  } finally {
+    savingModelDegradationPause.delete(account.id)
   }
 }
 // 批量降智检测在后台执行：记录提交时间，轮询快照，last_attempt_at 晚于提交时间即视为完成。

@@ -1136,6 +1136,8 @@ export interface ModelDegradationProbeSnapshot {
   paused_until?: string
   probe_resume_at?: string
   last_error?: string
+  // 本次检测实际发出的请求次数（含失败后的原地重试）
+  attempts?: number
   latency_ms?: number
   last_attempt_at: string
   next_probe_at: string
@@ -1149,6 +1151,11 @@ export interface ModelDegradationProbeBatchResult {
 export interface ModelDegradationProbeSnapshotItem {
   account_id: number
   snapshot: ModelDegradationProbeSnapshot | null
+}
+
+export interface ModelDegradationProbeModels {
+  models: string[]
+  default_model: string
 }
 
 export interface ModelDegradationProbeResult {

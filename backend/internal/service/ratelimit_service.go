@@ -2352,6 +2352,24 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	return nil
 }
 
+// ResumeAccountFromTempUnschedulable 解除账号的临时不可调度（数据库、缓存与运行时阻断）。
+// 与 ClearTempUnschedulable 不同，不清除模型级限流，供后台检测撤销自己设置的暂停。
+func (s *RateLimitService) ResumeAccountFromTempUnschedulable(ctx context.Context, accountID int64) error {
+	if s == nil || s.accountRepo == nil {
+		return errors.New("rate limit service is unavailable")
+	}
+	if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
+		return err
+	}
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.DeleteTempUnsched(ctx, accountID); err != nil {
+			slog.Warn("temp_unsched_cache_delete_failed", "account_id", accountID, "error", err)
+		}
+	}
+	s.notifyAccountSchedulingBlockCleared(accountID)
+	return nil
+}
+
 // PauseAccountTempUnschedulable 由后台检测主动暂停账号调度，同步临时不可调度缓存与运行时阻断。
 // 账号已处于更晚解除的临时不可调度时保持原状，不缩短已有冷却。
 func (s *RateLimitService) PauseAccountTempUnschedulable(ctx context.Context, account *Account, until time.Time, reason, source string) error {

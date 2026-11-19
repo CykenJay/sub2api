@@ -6356,8 +6356,11 @@ const handleSubmit = async () => {
 
       if (supportsModelDegradationProbe.value) {
         for (const [key, value] of Object.entries(buildModelDegradationExtra(modelDegradationSettings.value))) {
-          if (value > 0) newExtra[key] = value
-          else delete newExtra[key]
+          if (typeof value === 'boolean' || (typeof value === 'string' ? value !== '' : value > 0)) {
+            newExtra[key] = value
+          } else {
+            delete newExtra[key]
+          }
         }
       }
 

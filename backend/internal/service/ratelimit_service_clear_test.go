@@ -311,3 +311,15 @@ func TestRateLimitService_RecoverAccountState_InvalidatesOAuthTokenOnErrorRecove
 	require.Len(t, invalidator.accounts, 1)
 	require.Equal(t, int64(21), invalidator.accounts[0].ID)
 }
+
+func TestRateLimitService_ResumeAccountFromTempUnschedulable_KeepsModelRateLimits(t *testing.T) {
+	repo := &rateLimitClearRepoStub{}
+	cache := &tempUnschedCacheRecorder{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, cache)
+
+	require.NoError(t, svc.ResumeAccountFromTempUnschedulable(context.Background(), 42))
+
+	require.Equal(t, 1, repo.clearTempUnschedCalls)
+	require.Equal(t, []int64{42}, cache.deletedIDs)
+	require.Zero(t, repo.clearModelRateLimitCalls, "只撤销临时不可调度，不清除模型级限流")
+}

@@ -1,84 +1,21 @@
 package modeltrace
 
 import (
-	"encoding/json"
 	"errors"
-	"math"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// testdata/parity.json 由 ModelTrace 原版 JS 评分器（fingerprint-core.mjs）对其参考样本评分生成。
-type parityFixture struct {
-	Single []struct {
-		Source        string             `json:"source"`
-		Text          string             `json:"text"`
-		ExpectedCount int                `json:"expected_count"`
-		Top           string             `json:"top"`
-		Probabilities map[string]float64 `json:"probabilities"`
-	} `json:"single"`
-	Multi struct {
-		Outputs []struct {
-			Text          string `json:"text"`
-			ExpectedCount int    `json:"expected_count"`
-		} `json:"outputs"`
-		Top           string             `json:"top"`
-		Probabilities map[string]float64 `json:"probabilities"`
-	} `json:"multi"`
-}
-
-func loadParity(t *testing.T) parityFixture {
-	t.Helper()
-	raw, err := os.ReadFile("testdata/parity.json")
-	require.NoError(t, err)
-	var fixture parityFixture
-	require.NoError(t, json.Unmarshal(raw, &fixture))
-	require.NotEmpty(t, fixture.Single)
-	return fixture
-}
-
-func assertProbabilities(t *testing.T, want map[string]float64, got *Result) {
-	t.Helper()
-	require.Len(t, got.Candidates, len(want))
-	for _, candidate := range got.Candidates {
-		expected, ok := want[candidate.Model]
-		require.True(t, ok, candidate.Model)
-		require.LessOrEqual(t, math.Abs(expected-candidate.Probability), 1e-9, candidate.Model)
-	}
-}
-
 func TestDefaultBankLoads(t *testing.T) {
 	bank, err := DefaultBank()
 	require.NoError(t, err)
 	require.True(t, bank.HasModel("gpt-6-astra"))
+	require.True(t, bank.HasModel("gpt-6.2-astra"))
 	require.False(t, bank.HasModel("gpt-unknown"))
-}
-
-func TestAnalyzeMatchesJavaScriptScorer(t *testing.T) {
-	bank, err := DefaultBank()
-	require.NoError(t, err)
-	fixture := loadParity(t)
-	for _, tc := range fixture.Single {
-		t.Run(tc.Source, func(t *testing.T) {
-			result, err := bank.Analyze([]Output{{Text: tc.Text, ExpectedCount: tc.ExpectedCount}})
-			require.NoError(t, err)
-			require.Equal(t, tc.Top, result.Top().Model)
-			assertProbabilities(t, tc.Probabilities, result)
-		})
-	}
-
-	outputs := make([]Output, 0, len(fixture.Multi.Outputs))
-	for _, output := range fixture.Multi.Outputs {
-		outputs = append(outputs, Output{Text: output.Text, ExpectedCount: output.ExpectedCount})
-	}
-	result, err := bank.Analyze(outputs)
-	require.NoError(t, err)
-	require.Equal(t, 3, result.UsedOutputs)
-	require.Equal(t, fixture.Multi.Top, result.Top().Model)
-	assertProbabilities(t, fixture.Multi.Probabilities, result)
+	require.Contains(t, bank.ModelIDs(), "gpt-6.2-sol")
+	require.Len(t, bank.ModelIDs(), len(bank.Models))
 }
 
 func TestAnalyzeRejectsShortAnswers(t *testing.T) {

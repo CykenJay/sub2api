@@ -49,6 +49,40 @@ describe('ModelDegradationCell', () => {
     expect(wrapper.find('[data-testid="model-degradation-paused"]').exists()).toBe(false)
   })
 
+  it('有记录时显示请求次数', () => {
+    const snapshot = {
+      status: 'failed',
+      expected_model: 'gpt-6-astra',
+      consecutive_degraded: 0,
+      last_error: 'low confidence: top candidate gpt-6-astra 91.2% < 98%',
+      last_attempt_at: '2020-01-01T00:00:00Z',
+      next_probe_at: '2020-01-01T00:00:00Z'
+    }
+    const retried = mountCell({ extra: { model_degradation_probe: { ...snapshot, attempts: 4 } } })
+    expect(retried.get('[data-testid="model-degradation-attempts"]').text()).toContain('"count":4')
+    const legacy = mountCell({ extra: { model_degradation_probe: snapshot } })
+    expect(legacy.find('[data-testid="model-degradation-attempts"]').exists()).toBe(false)
+  })
+
+  it('降智暂停调度开关反映当前状态并在点击时发出切换事件', async () => {
+    const off = mountCell({ extra: { model_degradation_probe_pause_enabled: false, model_degradation_probe_pause_threshold: 2 } })
+    const toggle = off.get('[data-testid="model-degradation-pause-toggle"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    await toggle.trigger('click')
+    expect(off.emitted('toggle-pause')).toEqual([[true]])
+
+    // 未设置开关的老账号按阈值判断；开启时点击发出关闭。
+    const legacy = mountCell({ extra: { model_degradation_probe_pause_threshold: 2 } })
+    const legacyToggle = legacy.get('[data-testid="model-degradation-pause-toggle"]')
+    expect(legacyToggle.attributes('aria-checked')).toBe('true')
+    await legacyToggle.trigger('click')
+    expect(legacy.emitted('toggle-pause')).toEqual([[false]])
+
+    const saving = mountCell({ extra: {} })
+    await saving.setProps({ pauseSaving: true })
+    expect(saving.get('[data-testid="model-degradation-pause-toggle"]').attributes('disabled')).toBeDefined()
+  })
+
   it('未配置间隔且无结果时显示未开启', () => {
     const wrapper = mountCell({ extra: {} })
     expect(wrapper.get('[data-testid="model-degradation-status"]').text()).toBe('admin.accounts.modelDegradation.disabled')
