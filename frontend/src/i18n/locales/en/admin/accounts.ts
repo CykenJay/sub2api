@@ -338,8 +338,10 @@ export default {
       },
       modelDegradation: {
         title: 'Model degradation check',
-        hint: 'Periodically checks the selected model with ModelTrace numeric fingerprints, sending two challenges concurrently and scoring them together. A result only counts when the top candidate reaches 98% confidence: a top candidate other than the selected model flags the account as possibly degraded, and lower confidence counts as a failed check. A failed or incomplete answer is retried on its own; low confidence resamples both. Each check allows up to 3 retries, and each request generates about 300 integers.',
+        hint: 'Periodically checks the selected model with ModelTrace numeric fingerprints, sending two challenges concurrently and scoring them together. A result only counts when the top candidate reaches the configured confidence threshold: a top candidate other than the selected model flags the account as possibly degraded, and lower confidence counts as a failed check. A failed or incomplete answer is retried on its own; low confidence resamples both. Each check allows up to 3 retries, and each request generates about 300 integers.',
         model: 'Model to check',
+        minConfidence: 'Minimum fingerprint confidence (%)',
+        minConfidenceHint: 'Enter a whole percentage from 1 to 100. Defaults to 98. Changing it restarts the consecutive count on the next check.',
         modelHint: 'Requests this model and compares against its fingerprint. Only models in the fingerprint bank can be selected. Switching models restarts the consecutive flag count.',
         defaultModel: 'Default ({model})',
         interval: 'Check interval (minutes)',
@@ -388,7 +390,7 @@ export default {
         batchSkipped: '; skipped {count} non-OpenAI accounts',
         batchFinished: 'Batch degradation check finished: {normal} normal, {degraded} possibly degraded, {failed} failed',
         batchStalled: '{count} accounts have not reported results yet; stopped waiting, refresh later to check',
-        disclaimer: 'A top candidate below 98% confidence counts as a failed check; treat results as a reference.'
+        disclaimer: 'A top candidate below {percent}% confidence counts as a failed check; treat results as a reference.'
       },
       upstreamBilling: {
         trustWarning: 'This rate is declared by the upstream site for the current API key. Sub2API cannot verify that it matches actual charges. The upstream site or an intermediary may return forged, stale, or modified data. Verify it against bills, balance changes, and actual usage.',

@@ -1,6 +1,7 @@
 import { getModelDegradationProbeModels } from '@/api/admin/accounts'
 
 // 模型降智检测的账号级配置（accounts.extra），与后端 model_degradation_probe.go 保持一致。
+export const MODEL_DEGRADATION_DEFAULT_CONFIDENCE = 98
 export const MODEL_DEGRADATION_DEFAULT_MODEL = 'gpt-6-astra'
 export const MODEL_DEGRADATION_MAX_MINUTES = 7 * 24 * 60
 export const MODEL_DEGRADATION_MAX_PAUSE_THRESHOLD = 100
@@ -12,6 +13,7 @@ const MODEL_KEY = 'model_degradation_probe_model'
 export interface ModelDegradationSettings {
   // 检测的模型，'' 表示默认模型。
   model: string
+  minConfidencePercent: number | null
   intervalMinutes: number | null
   // 疑似降智后是否暂停调度；关闭时保留阈值与时长，重新勾选即可沿用。
   pauseEnabled: boolean
@@ -23,6 +25,7 @@ export interface ModelDegradationSettings {
 type NumericSettingField = Exclude<keyof ModelDegradationSettings, 'model' | 'pauseEnabled'>
 
 const SETTING_KEYS: Record<NumericSettingField, { key: string; maximum: number }> = {
+  minConfidencePercent: { key: 'model_degradation_probe_min_confidence_percent', maximum: 100 },
   intervalMinutes: { key: 'model_degradation_probe_interval_minutes', maximum: MODEL_DEGRADATION_MAX_MINUTES },
   pauseThreshold: { key: 'model_degradation_probe_pause_threshold', maximum: MODEL_DEGRADATION_MAX_PAUSE_THRESHOLD },
   pauseMinutes: { key: 'model_degradation_probe_pause_minutes', maximum: MODEL_DEGRADATION_MAX_MINUTES },
@@ -38,6 +41,7 @@ function normalizeSetting(value: unknown, maximum: number): number {
 export function defaultModelDegradationSettings(): ModelDegradationSettings {
   return {
     model: '',
+    minConfidencePercent: MODEL_DEGRADATION_DEFAULT_CONFIDENCE,
     intervalMinutes: 0,
     pauseEnabled: false,
     pauseThreshold: 1,
@@ -51,6 +55,7 @@ export function readModelDegradationSettings(extra?: Record<string, unknown> | n
   for (const [field, { key, maximum }] of Object.entries(SETTING_KEYS)) {
     settings[field as NumericSettingField] = normalizeSetting(extra?.[key], maximum)
   }
+  if (!settings.minConfidencePercent) settings.minConfidencePercent = MODEL_DEGRADATION_DEFAULT_CONFIDENCE
   const model = extra?.[MODEL_KEY]
   settings.model = typeof model === 'string' ? model.trim() : ''
   // 未设置开关时沿用旧语义：阈值大于 0 即开启暂停。
@@ -71,6 +76,7 @@ export function buildModelDegradationExtra(settings: ModelDegradationSettings): 
   for (const [field, { key, maximum }] of Object.entries(SETTING_KEYS)) {
     extra[key] = normalizeSetting(settings[field as NumericSettingField], maximum)
   }
+  extra[SETTING_KEYS.minConfidencePercent.key] ||= MODEL_DEGRADATION_DEFAULT_CONFIDENCE
   return extra
 }
 

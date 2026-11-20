@@ -1124,6 +1124,7 @@ export interface UpstreamBillingProbeSnapshot {
 export type ModelDegradationProbeStatus = 'normal' | 'degraded' | 'failed'
 
 export interface ModelDegradationProbeSnapshot {
+  min_confidence_percent?: number
   status: ModelDegradationProbeStatus
   expected_model: string
   top_model?: string
@@ -1328,6 +1329,7 @@ export interface Account {
     upstream_billing_probe_enabled?: boolean
     upstream_billing_rate_sync_enabled?: boolean
     upstream_billing_probe?: UpstreamBillingProbeSnapshot
+    model_degradation_probe_min_confidence_percent?: number
     model_degradation_probe_interval_minutes?: number
     model_degradation_probe_pause_threshold?: number
     model_degradation_probe_pause_minutes?: number

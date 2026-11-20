@@ -105,6 +105,14 @@ const fields: {
   pauseSetting?: boolean
 }[] = [
   {
+    name: 'minConfidencePercent',
+    label: 'admin.accounts.modelDegradation.minConfidence',
+    hint: 'admin.accounts.modelDegradation.minConfidenceHint',
+    minimum: 1,
+    maximum: 100,
+    testId: 'model-degradation-min-confidence'
+  },
+  {
     name: 'intervalMinutes',
     label: 'admin.accounts.modelDegradation.interval',
     hint: 'admin.accounts.modelDegradation.intervalHint',

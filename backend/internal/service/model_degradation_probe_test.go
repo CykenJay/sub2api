@@ -342,7 +342,7 @@ func TestModelDegradationProbeLowConfidenceIsFailure(t *testing.T) {
 	snapshot, err := svc.ProbeAccount(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, ModelDegradationProbeStatusFailed, snapshot.Status)
-	require.Less(t, snapshot.TopProbability, ModelDegradationProbeMinConfidence)
+	require.Less(t, snapshot.TopProbability, float64(ModelDegradationProbeDefaultConfidencePercent)/100)
 	require.Contains(t, snapshot.LastError, "low confidence")
 	require.Zero(t, snapshot.ConsecutiveDegraded, "置信度不足不计入疑似降智")
 	require.Equal(t, (ModelDegradationProbeMaxRetries+1)*ModelDegradationProbeSamples, snapshot.Attempts)
@@ -354,7 +354,7 @@ func TestModelDegradationProbeCombinesSamplesForConfidence(t *testing.T) {
 	require.NoError(t, err)
 	single, err := bank.Analyze([]modeltrace.Output{{Text: texts.lowConfidenceAstra, ExpectedCount: 218}})
 	require.NoError(t, err)
-	require.Less(t, single.Top().Probability, ModelDegradationProbeMinConfidence, "单条达不到门槛")
+	require.Less(t, single.Top().Probability, float64(ModelDegradationProbeDefaultConfidencePercent)/100, "单条达不到门槛")
 
 	now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 	repo := &modelDegradationProbeRepo{accounts: map[int64]*Account{
@@ -368,7 +368,7 @@ func TestModelDegradationProbeCombinesSamplesForConfidence(t *testing.T) {
 	snapshot, err := svc.ProbeAccount(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, ModelDegradationProbeStatusNormal, snapshot.Status, "两条合并后达到门槛")
-	require.GreaterOrEqual(t, snapshot.TopProbability, ModelDegradationProbeMinConfidence)
+	require.GreaterOrEqual(t, snapshot.TopProbability, float64(ModelDegradationProbeDefaultConfidencePercent)/100)
 	require.Equal(t, ModelDegradationProbeSamples, snapshot.Attempts)
 }
 
@@ -388,7 +388,33 @@ func TestModelDegradationProbeUsesSelectedModel(t *testing.T) {
 	require.Equal(t, "gpt-6-luna", snapshot.ExpectedModel)
 	require.Equal(t, ModelDegradationProbeStatusNormal, snapshot.Status, "第一候选与所选模型一致即正常")
 	require.Equal(t, []string{"gpt-6-luna", "gpt-6-luna"}, tester.models, "请求所选模型")
-	require.Greater(t, snapshot.ExpectedProbability, ModelDegradationProbeMinConfidence)
+	require.Greater(t, snapshot.ExpectedProbability, float64(ModelDegradationProbeDefaultConfidencePercent)/100)
+}
+
+func TestModelDegradationProbeChangingConfidence(t *testing.T) {
+	texts := loadModelDegradationReferenceTexts(t)
+	now := time.Now()
+	extra := map[string]any{
+		ModelDegradationProbeConfidenceExtraKey: 95,
+		ModelDegradationProbeExtraKey:           map[string]any{"status": "degraded", "consecutive_degraded": 2},
+	}
+	repo := &modelDegradationProbeRepo{accounts: map[int64]*Account{
+		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: extra},
+	}}
+	tester := &modelDegradationProbeTesterStub{replies: []*ScheduledTestResult{successReply(texts.other)}}
+	svc, _ := newModelDegradationProbeTestService(repo, tester, &now)
+	for _, wantCount := range []int{1, 2} {
+		snapshot, err := svc.ProbeAccount(context.Background(), 1)
+		require.NoError(t, err)
+		require.Equal(t, 95, snapshot.MinConfidencePercent)
+		require.Equal(t, wantCount, snapshot.ConsecutiveDegraded)
+	}
+	extra[ModelDegradationProbeConfidenceExtraKey] = 100
+	snapshot, err := svc.ProbeAccount(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, ModelDegradationProbeStatusFailed, snapshot.Status)
+	require.Contains(t, snapshot.LastError, "< 100%")
+	require.Zero(t, snapshot.ConsecutiveDegraded)
 }
 
 func TestModelDegradationProbeSwitchingModelResetsConsecutiveCount(t *testing.T) {
@@ -430,10 +456,10 @@ func TestModelDegradationProbeUnknownModelFailsWithoutRequest(t *testing.T) {
 }
 
 func TestModelDegradationProbeVerdictRequiresConfidence(t *testing.T) {
-	require.Equal(t, ModelDegradationProbeStatusNormal, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, ModelDegradationProbeDefaultModel, 0.98))
-	require.Equal(t, ModelDegradationProbeStatusDegraded, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, "gpt-6-luna", 0.999))
-	require.Equal(t, ModelDegradationProbeStatusFailed, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, ModelDegradationProbeDefaultModel, 0.979))
-	require.Equal(t, ModelDegradationProbeStatusFailed, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, "gpt-6-luna", 0.6))
+	require.Equal(t, ModelDegradationProbeStatusNormal, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, ModelDegradationProbeDefaultModel, 0.98, 98))
+	require.Equal(t, ModelDegradationProbeStatusDegraded, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, "gpt-6-luna", 0.999, 98))
+	require.Equal(t, ModelDegradationProbeStatusFailed, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, ModelDegradationProbeDefaultModel, 0.979, 98))
+	require.Equal(t, ModelDegradationProbeStatusFailed, modelDegradationProbeVerdict(ModelDegradationProbeDefaultModel, "gpt-6-luna", 0.6, 98))
 }
 
 func TestModelDegradationProbePauseEnabledSwitch(t *testing.T) {
@@ -625,6 +651,9 @@ func TestValidateModelDegradationProbeExtra(t *testing.T) {
 	require.NoError(t, ValidateModelDegradationProbeExtra(map[string]any{ModelDegradationProbePauseEnabledExtraKey: true}))
 	require.Error(t, ValidateModelDegradationProbeExtra(map[string]any{ModelDegradationProbePauseEnabledExtraKey: "true"}))
 
+	for _, invalid := range []any{0, 101, 95.5} {
+		require.Error(t, ValidateModelDegradationProbeExtra(map[string]any{ModelDegradationProbeConfidenceExtraKey: invalid}))
+	}
 	modelExtra := map[string]any{ModelDegradationProbeModelExtraKey: " gpt-6.2-astra "}
 	require.NoError(t, ValidateModelDegradationProbeExtra(modelExtra))
 	require.Equal(t, "gpt-6.2-astra", modelExtra[ModelDegradationProbeModelExtraKey])

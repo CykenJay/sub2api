@@ -250,6 +250,7 @@ describe('BulkEditAccountModal', () => {
     await wrapper.get('#bulk-edit-model-degradation-enabled').setValue(true)
     await wrapper.get('[data-testid="model-degradation-interval"]').setValue('30')
     await wrapper.get('[data-testid="model-degradation-pause-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="model-degradation-min-confidence"]').setValue('95')
     await wrapper.get('[data-testid="model-degradation-pause-threshold"]').setValue('2')
     await wrapper.get('[data-testid="model-degradation-pause-minutes"]').setValue('90')
     await wrapper.get('[data-testid="model-degradation-cooldown"]').setValue('120')
@@ -259,6 +260,7 @@ describe('BulkEditAccountModal', () => {
     expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
       extra: {
         model_degradation_probe_model: '',
+        model_degradation_probe_min_confidence_percent: 95,
         model_degradation_probe_pause_enabled: true,
         model_degradation_probe_interval_minutes: 30,
         model_degradation_probe_pause_threshold: 2,
@@ -279,6 +281,7 @@ describe('BulkEditAccountModal', () => {
     expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
       extra: {
         model_degradation_probe_model: '',
+        model_degradation_probe_min_confidence_percent: 98,
         model_degradation_probe_pause_enabled: false,
         model_degradation_probe_interval_minutes: 0,
         model_degradation_probe_pause_threshold: 1,

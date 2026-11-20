@@ -59,7 +59,7 @@
               })
             }}
           </p>
-          <p class="text-gray-400">{{ t('admin.accounts.modelDegradation.disclaimer') }}</p>
+          <p class="text-gray-400">{{ t('admin.accounts.modelDegradation.disclaimer', { percent: snapshot ? snapshot.min_confidence_percent || MODEL_DEGRADATION_DEFAULT_CONFIDENCE : settings.minConfidencePercent }) }}</p>
         </div>
       </HelpTooltip>
       <button
@@ -114,6 +114,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { formatDateTime } from '@/utils/format'
 import type { Account, ModelDegradationProbeSnapshot } from '@/types'
 import {
+  MODEL_DEGRADATION_DEFAULT_CONFIDENCE,
   MODEL_DEGRADATION_DEFAULT_MODEL,
   computeModelDegradationSchedule,
   readModelDegradationSettings

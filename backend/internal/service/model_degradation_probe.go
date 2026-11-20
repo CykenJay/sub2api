@@ -23,11 +23,12 @@ import (
 
 // 模型降智检测：按账号配置的间隔，用 ModelTrace 数字指纹挑战请求账号选定的检测模型
 // （默认 gpt-6-astra，必须收录在指纹库中）。每次检测并发采集两条回答合并评分，第一候选
-// 概率达到 98% 才是有效结论：第一候选不是检测模型即视为疑似降智，置信度不足按检测失败处理。
+// 概率达到账号阈值（默认 98%）才是有效结论：第一候选不是检测模型即视为疑似降智，置信度不足按检测失败处理。
 // 检测失败时立即原地重试。配置与结果都存放在 accounts.extra。
 const (
 	// ModelDegradationProbeModelExtraKey 检测的模型，必须收录在指纹库中；缺省或空表示 ModelDegradationProbeDefaultModel。
-	ModelDegradationProbeModelExtraKey = "model_degradation_probe_model"
+	ModelDegradationProbeModelExtraKey      = "model_degradation_probe_model"
+	ModelDegradationProbeConfidenceExtraKey = "model_degradation_probe_min_confidence_percent"
 	// ModelDegradationProbeIntervalExtraKey 检测间隔（分钟），0 或缺省表示不检测。
 	ModelDegradationProbeIntervalExtraKey = "model_degradation_probe_interval_minutes"
 	// ModelDegradationProbePauseEnabledExtraKey 疑似降智后是否暂停调度；缺省时按阈值是否大于 0 判断（兼容旧配置）。
@@ -44,13 +45,12 @@ const (
 	// ModelDegradationProbeDefaultModel 未选择检测模型时使用的默认模型。
 	ModelDegradationProbeDefaultModel = "gpt-6-astra"
 
-	ModelDegradationProbeMaxIntervalMinutes  = 7 * 24 * 60
-	ModelDegradationProbeMaxPauseThreshold   = 100
-	ModelDegradationProbeMaxPauseMinutes     = 7 * 24 * 60
-	ModelDegradationProbeMaxCooldownMinutes  = 7 * 24 * 60
-	ModelDegradationProbeDefaultPauseMinutes = 60
-	// ModelDegradationProbeMinConfidence 指纹第一候选概率低于该值时结论无效，按检测失败处理。
-	ModelDegradationProbeMinConfidence = 0.98
+	ModelDegradationProbeMaxIntervalMinutes       = 7 * 24 * 60
+	ModelDegradationProbeMaxPauseThreshold        = 100
+	ModelDegradationProbeMaxPauseMinutes          = 7 * 24 * 60
+	ModelDegradationProbeMaxCooldownMinutes       = 7 * 24 * 60
+	ModelDegradationProbeDefaultPauseMinutes      = 60
+	ModelDegradationProbeDefaultConfidencePercent = 98
 	// ModelDegradationProbeSamples 每轮并发采集的指纹回答条数，合并评分得出一个结论。
 	ModelDegradationProbeSamples = 2
 	// ModelDegradationProbeMaxRetries 一次检测内失败后立即原地重试的总次数（单条重试与整轮重来共用）。
@@ -90,15 +90,16 @@ type ModelDegradationProbeCandidate struct {
 
 // ModelDegradationProbeSnapshot 持久化在 accounts.extra[model_degradation_probe]。
 type ModelDegradationProbeSnapshot struct {
-	Status              string                           `json:"status"`
-	ExpectedModel       string                           `json:"expected_model"`
-	TopModel            string                           `json:"top_model,omitempty"`
-	TopProbability      float64                          `json:"top_probability,omitempty"`
-	ExpectedProbability float64                          `json:"expected_probability,omitempty"`
-	Candidates          []ModelDegradationProbeCandidate `json:"candidates,omitempty"`
-	ParsedNumbers       int                              `json:"parsed_numbers,omitempty"`
-	RequestedNumbers    int                              `json:"requested_numbers,omitempty"`
-	ConsecutiveDegraded int                              `json:"consecutive_degraded"`
+	MinConfidencePercent int                              `json:"min_confidence_percent"`
+	Status               string                           `json:"status"`
+	ExpectedModel        string                           `json:"expected_model"`
+	TopModel             string                           `json:"top_model,omitempty"`
+	TopProbability       float64                          `json:"top_probability,omitempty"`
+	ExpectedProbability  float64                          `json:"expected_probability,omitempty"`
+	Candidates           []ModelDegradationProbeCandidate `json:"candidates,omitempty"`
+	ParsedNumbers        int                              `json:"parsed_numbers,omitempty"`
+	RequestedNumbers     int                              `json:"requested_numbers,omitempty"`
+	ConsecutiveDegraded  int                              `json:"consecutive_degraded"`
 	// PausedUntil 是本检测最近一次设置的临时不可调度截止时间。
 	PausedUntil *time.Time `json:"paused_until,omitempty"`
 	// ProbeResumeAt 是疑似降智后停止自动检测的截止时间。
@@ -222,13 +223,14 @@ func IsModelDegradationProbeAccount(account *Account) bool {
 // ValidateModelDegradationProbeExtra 校验管理端提交的降智检测配置。
 func ValidateModelDegradationProbeExtra(extra map[string]any) error {
 	checks := []struct {
-		key     string
-		maximum int
+		key              string
+		minimum, maximum int
 	}{
-		{ModelDegradationProbeIntervalExtraKey, ModelDegradationProbeMaxIntervalMinutes},
-		{ModelDegradationProbePauseThresholdExtraKey, ModelDegradationProbeMaxPauseThreshold},
-		{ModelDegradationProbePauseMinutesExtraKey, ModelDegradationProbeMaxPauseMinutes},
-		{ModelDegradationProbeCooldownMinutesExtraKey, ModelDegradationProbeMaxCooldownMinutes},
+		{ModelDegradationProbeConfidenceExtraKey, 1, 100},
+		{ModelDegradationProbeIntervalExtraKey, 0, ModelDegradationProbeMaxIntervalMinutes},
+		{ModelDegradationProbePauseThresholdExtraKey, 0, ModelDegradationProbeMaxPauseThreshold},
+		{ModelDegradationProbePauseMinutesExtraKey, 0, ModelDegradationProbeMaxPauseMinutes},
+		{ModelDegradationProbeCooldownMinutesExtraKey, 0, ModelDegradationProbeMaxCooldownMinutes},
 	}
 	if raw, ok := extra[ModelDegradationProbeModelExtraKey]; ok && raw != nil {
 		model, valid := raw.(string)
@@ -258,8 +260,8 @@ func ValidateModelDegradationProbeExtra(extra map[string]any) error {
 			continue
 		}
 		value, valid := modelDegradationProbeIntValue(raw)
-		if !valid || value < 0 || value > check.maximum {
-			return fmt.Errorf("%s must be an integer between 0 and %d", check.key, check.maximum)
+		if !valid || value < check.minimum || value > check.maximum {
+			return fmt.Errorf("%s must be an integer between %d and %d", check.key, check.minimum, check.maximum)
 		}
 		extra[check.key] = value
 	}
@@ -690,9 +692,14 @@ func (s *ModelDegradationProbeService) probe(ctx context.Context, accountID int6
 func (s *ModelDegradationProbeService) probeLoadedAccount(ctx context.Context, account *Account) (*ModelDegradationProbeSnapshot, error) {
 	previous := DecodeModelDegradationProbeSnapshot(account.Extra)
 	startedAt := s.currentTime().UTC()
+	confidence := account.getExtraInt(ModelDegradationProbeConfidenceExtraKey)
+	if confidence < 1 || confidence > 100 {
+		confidence = ModelDegradationProbeDefaultConfidencePercent
+	}
 	snapshot := &ModelDegradationProbeSnapshot{
-		ExpectedModel: ModelDegradationProbeModel(account),
-		LastAttemptAt: startedAt,
+		MinConfidencePercent: confidence,
+		ExpectedModel:        ModelDegradationProbeModel(account),
+		LastAttemptAt:        startedAt,
 	}
 	if previous != nil {
 		// 切换检测模型后，之前累计的是另一个模型的结果，连续计数重新开始。
@@ -701,7 +708,11 @@ func (s *ModelDegradationProbeService) probeLoadedAccount(ctx context.Context, a
 		if previousModel == "" {
 			previousModel = ModelDegradationProbeDefaultModel
 		}
-		if previousModel == snapshot.ExpectedModel {
+		previousConfidence := previous.MinConfidencePercent
+		if previousConfidence == 0 {
+			previousConfidence = ModelDegradationProbeDefaultConfidencePercent
+		}
+		if previousModel == snapshot.ExpectedModel && previousConfidence == confidence {
 			snapshot.ConsecutiveDegraded = previous.ConsecutiveDegraded
 		}
 		if previous.PausedUntil != nil && previous.PausedUntil.After(startedAt) {
@@ -918,17 +929,17 @@ func applyModelDegradationProbeAnalysis(bank *modeltrace.Bank, samples []modelDe
 			Probability: analysis.Candidates[i].Probability,
 		})
 	}
-	snapshot.Status = modelDegradationProbeVerdict(snapshot.ExpectedModel, top.Model, top.Probability)
+	snapshot.Status = modelDegradationProbeVerdict(snapshot.ExpectedModel, top.Model, top.Probability, snapshot.MinConfidencePercent)
 	if snapshot.Status == ModelDegradationProbeStatusFailed {
-		snapshot.LastError = fmt.Sprintf("low confidence: top candidate %s %.1f%% < %.0f%%",
-			top.Model, top.Probability*100, ModelDegradationProbeMinConfidence*100)
+		snapshot.LastError = fmt.Sprintf("low confidence: top candidate %s %.1f%% < %d%%",
+			top.Model, top.Probability*100, snapshot.MinConfidencePercent)
 	}
 }
 
 // modelDegradationProbeVerdict 按指纹第一候选给出结论，置信度不足时结论无效。
-func modelDegradationProbeVerdict(expectedModel, topModel string, topProbability float64) string {
+func modelDegradationProbeVerdict(expectedModel, topModel string, topProbability float64, minConfidencePercent int) string {
 	switch {
-	case topProbability < ModelDegradationProbeMinConfidence:
+	case topProbability < float64(minConfidencePercent)/100:
 		return ModelDegradationProbeStatusFailed
 	case topModel == expectedModel:
 		return ModelDegradationProbeStatusNormal
