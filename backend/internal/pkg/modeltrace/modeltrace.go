@@ -2,8 +2,8 @@
 // 的统一全局稳健数字指纹评分器：让模型逐项给出 1..355 的整数，按数字分布与
 // 有序块特征对比指纹库中各模型的中心，得到候选模型的闭集概率。
 //
-// unified_bank.json 是 ModelTrace 格式的 GPT 指纹库（构建于 2026-11-18，含 gpt-5.4 至 gpt-6.2 共 10 个模型，
-// sha256 0e69cef8c29e713a78360f3e4aeceebaa352533bcb9d8f74dcaa3adc00aedd9c），
+// unified_bank.json 是 ModelTrace 格式的 指纹库（构建于 2026-11-20 UTC，共 56 个模型，
+// sha256 f76d14c89da834aacd87ea685ef95ae2d4e235a516293b0926130a1abe1b9882），
 // 评分逻辑与 ModelTrace static/fingerprint-core.js 保持一致。
 package modeltrace
 
