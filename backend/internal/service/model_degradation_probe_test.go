@@ -142,7 +142,7 @@ type modelDegradationReferenceTexts struct {
 	opus  []string
 	astra string
 	other string
-	// lowConfidenceAstra 是 gpt-6.2-astra 的真实回答，但指纹第一候选置信度不足 98%。
+	// lowConfidenceAstra 是 gpt-6.2-astra 的真实回答，用于验证单条和双样本的置信度差异。
 	lowConfidenceAstra string
 }
 
@@ -372,16 +372,17 @@ func TestModelDegradationProbeLowConfidenceIsFailure(t *testing.T) {
 }
 
 func TestModelDegradationProbeCombinesSamplesForConfidence(t *testing.T) {
+	const threshold = 99
 	texts := loadModelDegradationReferenceTexts(t)
 	bank, err := modeltrace.DefaultBank()
 	require.NoError(t, err)
 	single, err := bank.Analyze([]modeltrace.Output{{Text: texts.lowConfidenceAstra, ExpectedCount: 218}})
 	require.NoError(t, err)
-	require.Less(t, single.Top().Probability, float64(ModelDegradationProbeDefaultConfidencePercent)/100, "单条达不到门槛")
+	require.Less(t, single.Top().Probability, float64(threshold)/100, "单条达不到门槛")
 
 	now := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 	repo := &modelDegradationProbeRepo{accounts: map[int64]*Account{
-		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{}},
+		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{ModelDegradationProbeConfidenceExtraKey: threshold}},
 	}}
 	tester := &modelDegradationProbeTesterStub{replies: []*ScheduledTestResult{
 		successReply(texts.lowConfidenceAstra), successReply(texts.astra),
@@ -391,7 +392,7 @@ func TestModelDegradationProbeCombinesSamplesForConfidence(t *testing.T) {
 	snapshot, err := svc.ProbeAccount(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, ModelDegradationProbeStatusNormal, snapshot.Status, "两条合并后达到门槛")
-	require.GreaterOrEqual(t, snapshot.TopProbability, float64(ModelDegradationProbeDefaultConfidencePercent)/100)
+	require.GreaterOrEqual(t, snapshot.TopProbability, float64(threshold)/100)
 	require.Equal(t, ModelDegradationProbeSamples, snapshot.Attempts)
 }
 
