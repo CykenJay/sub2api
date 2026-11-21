@@ -141,7 +141,7 @@ func (p *modelDegradationProbePauserStub) PauseAccountTempUnschedulable(_ contex
 type modelDegradationReferenceTexts struct {
 	astra string
 	other string
-	// lowConfidenceAstra 是 gpt-6-astra 的真实回答，但指纹第一候选置信度不足 98%。
+	// lowConfidenceAstra 是 gpt-6.2-astra 的真实回答，但指纹第一候选置信度不足 98%。
 	lowConfidenceAstra string
 }
 
@@ -278,7 +278,7 @@ func TestModelDegradationProbeFailureKeepsCountWithoutPausing(t *testing.T) {
 				ModelDegradationProbeIntervalExtraKey:       5,
 				ModelDegradationProbePauseThresholdExtraKey: 1,
 				ModelDegradationProbeExtraKey: map[string]any{
-					"status": "degraded", "consecutive_degraded": 1,
+					"status": "degraded", "expected_model": ModelDegradationProbeDefaultModel, "consecutive_degraded": 1,
 					"last_attempt_at": now.Add(-time.Hour), "next_probe_at": now.Add(-time.Minute),
 				},
 			},
@@ -396,7 +396,7 @@ func TestModelDegradationProbeChangingConfidence(t *testing.T) {
 	now := time.Now()
 	extra := map[string]any{
 		ModelDegradationProbeConfidenceExtraKey: 95,
-		ModelDegradationProbeExtraKey:           map[string]any{"status": "degraded", "consecutive_degraded": 2},
+		ModelDegradationProbeExtraKey:           map[string]any{"status": "degraded", "expected_model": ModelDegradationProbeDefaultModel, "consecutive_degraded": 2},
 	}
 	repo := &modelDegradationProbeRepo{accounts: map[int64]*Account{
 		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: extra},
@@ -436,6 +436,24 @@ func TestModelDegradationProbeSwitchingModelResetsConsecutiveCount(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, ModelDegradationProbeStatusDegraded, snapshot.Status)
 	require.Equal(t, 1, snapshot.ConsecutiveDegraded, "换模型后不沿用旧模型的连续次数")
+}
+
+func TestModelDegradationProbeLegacySnapshotUsesOriginalDefault(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		model     string
+		wantCount int
+	}{{"", 1}, {"gpt-6-astra", 3}} {
+		repo := &modelDegradationProbeRepo{accounts: map[int64]*Account{1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+			ModelDegradationProbeModelExtraKey: tc.model,
+			ModelDegradationProbeExtraKey:      map[string]any{"status": "degraded", "consecutive_degraded": 2},
+		}}}}
+		tester := &modelDegradationProbeTesterStub{replies: []*ScheduledTestResult{successReply(loadModelDegradationReferenceTexts(t).other)}}
+		svc, _ := newModelDegradationProbeTestService(repo, tester, &now)
+		snapshot, err := svc.ProbeAccount(context.Background(), 1)
+		require.NoError(t, err)
+		require.Equal(t, tc.wantCount, snapshot.ConsecutiveDegraded)
+	}
 }
 
 func TestModelDegradationProbeUnknownModelFailsWithoutRequest(t *testing.T) {

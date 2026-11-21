@@ -32,7 +32,7 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn(),
   getModelDegradationProbeModels: vi.fn().mockResolvedValue({
     models: ['gpt-6-astra', 'gpt-6-luna', 'gpt-6.2-astra'],
-    default_model: 'gpt-6-astra'
+    default_model: 'gpt-6.2-astra'
   })
 }))
 
@@ -297,16 +297,16 @@ describe('BulkEditAccountModal', () => {
 
     await wrapper.get('#bulk-edit-model-degradation-enabled').setValue(true)
     const select = wrapper.get('[data-testid="model-degradation-model"]')
-    expect(select.findAll('option').map((option) => option.attributes('value'))).toEqual(['', 'gpt-6-luna', 'gpt-6.2-astra'])
+    expect(select.findAll('option').map((option) => option.attributes('value'))).toEqual(['', 'gpt-6-astra', 'gpt-6-luna'])
 
-    await select.setValue('gpt-6.2-astra')
+    await select.setValue('gpt-6-astra')
     await wrapper.get('[data-testid="model-degradation-interval"]').setValue('30')
     await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
     await flushPromises()
 
     expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
       extra: expect.objectContaining({
-        model_degradation_probe_model: 'gpt-6.2-astra',
+        model_degradation_probe_model: 'gpt-6-astra',
         model_degradation_probe_interval_minutes: 30
       })
     })

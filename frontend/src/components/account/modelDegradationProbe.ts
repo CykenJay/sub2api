@@ -2,7 +2,7 @@ import { getModelDegradationProbeModels } from '@/api/admin/accounts'
 
 // 模型降智检测的账号级配置（accounts.extra），与后端 model_degradation_probe.go 保持一致。
 export const MODEL_DEGRADATION_DEFAULT_CONFIDENCE = 98
-export const MODEL_DEGRADATION_DEFAULT_MODEL = 'gpt-6-astra'
+export const MODEL_DEGRADATION_DEFAULT_MODEL = 'gpt-6.2-astra'
 export const MODEL_DEGRADATION_MAX_MINUTES = 7 * 24 * 60
 export const MODEL_DEGRADATION_MAX_PAUSE_THRESHOLD = 100
 export const MODEL_DEGRADATION_DEFAULT_PAUSE_MINUTES = 60

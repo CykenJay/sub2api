@@ -43,7 +43,7 @@ const (
 	ModelDegradationProbeExtraKey = "model_degradation_probe"
 
 	// ModelDegradationProbeDefaultModel 未选择检测模型时使用的默认模型。
-	ModelDegradationProbeDefaultModel = "gpt-6-astra"
+	ModelDegradationProbeDefaultModel = "gpt-6.2-astra"
 
 	ModelDegradationProbeMaxIntervalMinutes       = 7 * 24 * 60
 	ModelDegradationProbeMaxPauseThreshold        = 100
@@ -703,10 +703,10 @@ func (s *ModelDegradationProbeService) probeLoadedAccount(ctx context.Context, a
 	}
 	if previous != nil {
 		// 切换检测模型后，之前累计的是另一个模型的结果，连续计数重新开始。
-		// 未记录检测模型的快照按默认模型处理。
+		// 未记录检测模型的旧快照使用当时的默认模型 gpt-6-astra。
 		previousModel := previous.ExpectedModel
 		if previousModel == "" {
-			previousModel = ModelDegradationProbeDefaultModel
+			previousModel = "gpt-6-astra"
 		}
 		previousConfidence := previous.MinConfidencePercent
 		if previousConfidence == 0 {
