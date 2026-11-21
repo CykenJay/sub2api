@@ -701,7 +701,7 @@
         </div>
       </div>
 
-      <!-- Model degradation check (OpenAI OAuth / API Key) -->
+      <!-- Model degradation check -->
       <div
         v-if="allModelDegradationProbeCapable"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
@@ -733,7 +733,7 @@
           class="mt-3"
           :class="!enableModelDegradation && 'pointer-events-none opacity-50'"
         >
-          <ModelDegradationProbeSettings v-model="modelDegradationSettings" />
+          <ModelDegradationProbeSettings :platform="targetSelectedPlatforms[0]" v-model="modelDegradationSettings" />
         </div>
       </div>
 
@@ -1679,6 +1679,7 @@ import TempUnschedRulesEditor from '@/components/account/TempUnschedRulesEditor.
 import ModelDegradationProbeSettings from '@/components/account/ModelDegradationProbeSettings.vue'
 import {
   buildModelDegradationExtra,
+  isProbeAccount,
   defaultModelDegradationSettings,
   type ModelDegradationSettings
 } from '@/components/account/modelDegradationProbe'
@@ -1788,13 +1789,12 @@ const allOpenAIAPIKey = computed(() => {
   )
 })
 
-// 模型降智检测只对 OpenAI OAuth / API Key 账号生效
+// 按所选平台和账号类型判断是否支持降智检测
 const allModelDegradationProbeCapable = computed(() => {
   return (
     targetSelectedPlatforms.value.length === 1 &&
-    targetSelectedPlatforms.value[0] === 'openai' &&
     targetSelectedTypes.value.length > 0 &&
-    targetSelectedTypes.value.every(t => t === 'oauth' || t === 'apikey')
+    targetSelectedTypes.value.every(t => isProbeAccount(targetSelectedPlatforms.value[0], t))
   )
 })
 

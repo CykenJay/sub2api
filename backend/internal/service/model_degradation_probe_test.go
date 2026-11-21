@@ -139,6 +139,7 @@ func (p *modelDegradationProbePauserStub) PauseAccountTempUnschedulable(_ contex
 }
 
 type modelDegradationReferenceTexts struct {
+	opus  []string
 	astra string
 	other string
 	// lowConfidenceAstra 是 gpt-6.2-astra 的真实回答，但指纹第一候选置信度不足 98%。
@@ -150,12 +151,13 @@ func loadModelDegradationReferenceTexts(t *testing.T) modelDegradationReferenceT
 	raw, err := os.ReadFile("testdata/model_degradation_reference.json")
 	require.NoError(t, err)
 	var fixture struct {
-		Astra              string `json:"astra"`
-		Other              string `json:"other"`
-		LowConfidenceAstra string `json:"low_confidence_astra"`
+		Opus               []string `json:"opus"`
+		Astra              string   `json:"astra"`
+		Other              string   `json:"other"`
+		LowConfidenceAstra string   `json:"low_confidence_astra"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &fixture))
-	texts := modelDegradationReferenceTexts{astra: fixture.Astra, other: fixture.Other, lowConfidenceAstra: fixture.LowConfidenceAstra}
+	texts := modelDegradationReferenceTexts{opus: fixture.Opus, astra: fixture.Astra, other: fixture.Other, lowConfidenceAstra: fixture.LowConfidenceAstra}
 	require.NotEmpty(t, texts.astra)
 	require.NotEmpty(t, texts.other)
 	require.NotEmpty(t, texts.lowConfidenceAstra)
@@ -176,6 +178,27 @@ func newModelDegradationProbeTestService(repo *modelDegradationProbeRepo, tester
 
 func successReply(text string) *ScheduledTestResult {
 	return &ScheduledTestResult{Status: "success", ResponseText: text, LatencyMs: 1200}
+}
+
+func TestModelDegradationProbeAnthropicAccounts(t *testing.T) {
+	texts := loadModelDegradationReferenceTexts(t)
+	require.Len(t, texts.opus, 2)
+	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey, AccountTypeBedrock, AccountTypeServiceAccount} {
+		t.Run(typ, func(t *testing.T) {
+			now := time.Now()
+			repo := &modelDegradationProbeRepo{accounts: map[int64]*Account{1: {ID: 1, Platform: PlatformAnthropic, Type: typ, Status: StatusActive, Extra: map[string]any{ModelDegradationProbeIntervalExtraKey: 30}}}}
+			tester := &modelDegradationProbeTesterStub{replies: []*ScheduledTestResult{successReply(texts.opus[0]), successReply(texts.opus[1]), successReply(texts.other)}}
+			svc, _ := newModelDegradationProbeTestService(repo, tester, &now)
+			require.NoError(t, svc.RunDue(context.Background()))
+			snapshot := repo.snapshot(t, 1)
+			require.Equal(t, "claude-opus-5-5", snapshot.TopModel)
+			require.Equal(t, ModelDegradationProbeStatusNormal, snapshot.Status)
+			snapshot, err := svc.ProbeAccount(context.Background(), 1)
+			require.NoError(t, err)
+			require.Equal(t, ModelDegradationProbeStatusDegraded, snapshot.Status)
+			require.Equal(t, "claude-opus-5-5", snapshot.ExpectedModel)
+		})
+	}
 }
 
 func TestModelDegradationProbeNormalAndDegraded(t *testing.T) {
@@ -504,7 +527,7 @@ func TestModelDegradationProbeSetPauseEnabled(t *testing.T) {
 		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{
 			ModelDegradationProbePauseThresholdExtraKey: 3,
 		}},
-		2: {ID: 2, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive},
+		2: {ID: 2, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive},
 	}}
 	svc, pauser := newModelDegradationProbeTestService(repo, &modelDegradationProbeTesterStub{}, &now)
 
@@ -604,7 +627,7 @@ func TestModelDegradationProbeSkipsDisabledAndUnsupportedAccounts(t *testing.T) 
 		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{
 			ModelDegradationProbeIntervalExtraKey: 0,
 		}},
-		2: {ID: 2, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{
+		2: {ID: 2, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{
 			ModelDegradationProbeIntervalExtraKey: 5,
 		}},
 	}}
@@ -736,7 +759,7 @@ func TestModelDegradationProbeBatchRunsInBackground(t *testing.T) {
 	repo := &modelDegradationProbeRepo{accounts: map[int64]*Account{
 		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{}},
 		2: {ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Extra: map[string]any{}},
-		3: {ID: 3, Platform: PlatformAnthropic, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{}},
+		3: {ID: 3, Platform: PlatformGemini, Type: AccountTypeOAuth, Status: StatusActive, Extra: map[string]any{}},
 	}}
 	tester := &modelDegradationProbeTesterStub{replies: []*ScheduledTestResult{successReply(texts.astra)}}
 	svc, _ := newModelDegradationProbeTestService(repo, tester, &now)

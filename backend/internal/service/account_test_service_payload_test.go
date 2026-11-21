@@ -8,6 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAnthropicFingerprintPrompt(t *testing.T) {
+	const challenge = "choose integers between 1 and 355"
+	payload, err := createTestPayload("claude-sonnet-4-6", challenge)
+	require.NoError(t, err)
+	for _, body := range []map[string]any{payload, buildBedrockTestPayload("claude-sonnet-4-6", challenge)} {
+		messages := body["messages"].([]map[string]any)
+		require.Equal(t, challenge, messages[0]["content"].([]map[string]any)[0]["text"])
+		require.Equal(t, 4096, body["max_tokens"])
+	}
+}
+
 func TestCreateTestPayload_Temperature(t *testing.T) {
 	tests := []struct {
 		model           string
@@ -25,7 +36,7 @@ func TestCreateTestPayload_Temperature(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			payload, err := createTestPayload(tt.model)
+			payload, err := createTestPayload(tt.model, "")
 			require.NoError(t, err)
 
 			temperature, present := payload["temperature"]
@@ -48,7 +59,7 @@ func TestBuildBedrockTestPayload_Temperature(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			_, present := buildBedrockTestPayload(tt.model)["temperature"]
+			_, present := buildBedrockTestPayload(tt.model, "")["temperature"]
 			require.Equal(t, tt.wantTemperature, present)
 		})
 	}

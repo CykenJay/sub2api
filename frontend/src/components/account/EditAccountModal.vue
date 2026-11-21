@@ -1666,7 +1666,7 @@
         </div>
       </div>
 
-      <!-- Model degradation check (OpenAI OAuth / API Key) -->
+      <!-- Model degradation check -->
       <div
         v-if="supportsModelDegradationProbe"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-3"
@@ -1678,7 +1678,7 @@
             {{ t('admin.accounts.modelDegradation.hint') }}
           </p>
         </div>
-        <ModelDegradationProbeSettings v-model="modelDegradationSettings" />
+        <ModelDegradationProbeSettings :platform="account?.platform" v-model="modelDegradationSettings" />
       </div>
 
       <!-- Temp Unschedulable Rules -->
@@ -3522,6 +3522,7 @@ import {
   buildModelDegradationExtra,
   defaultModelDegradationSettings,
   readModelDegradationSettings,
+  isProbeAccount,
   type ModelDegradationSettings
 } from '@/components/account/modelDegradationProbe'
 import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
@@ -4197,10 +4198,10 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
-// 模型降智检测（OpenAI OAuth/API Key）
+// 模型降智检测（OpenAI / Anthropic）
 const modelDegradationSettings = ref<ModelDegradationSettings>(defaultModelDegradationSettings())
 const supportsModelDegradationProbe = computed(() =>
-  props.account?.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'apikey')
+  props.account && isProbeAccount(props.account.platform, props.account.type)
 )
 const openaiPassthroughModelFilterEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
@@ -6354,16 +6355,6 @@ const handleSubmit = async () => {
         }
       }
 
-      if (supportsModelDegradationProbe.value) {
-        for (const [key, value] of Object.entries(buildModelDegradationExtra(modelDegradationSettings.value))) {
-          if (typeof value === 'boolean' || (typeof value === 'string' ? value !== '' : value > 0)) {
-            newExtra[key] = value
-          } else {
-            delete newExtra[key]
-          }
-        }
-      }
-
       updatePayload.extra = newExtra
     }
 
@@ -6424,6 +6415,18 @@ const handleSubmit = async () => {
       }
       // Quota notify config
       writeQuotaNotifyToExtra(newExtra, 'update')
+      updatePayload.extra = newExtra
+    }
+
+    if (supportsModelDegradationProbe.value) {
+      const newExtra = { ...(updatePayload.extra as Record<string, unknown> ?? props.account.extra) }
+      for (const [key, value] of Object.entries(buildModelDegradationExtra(modelDegradationSettings.value))) {
+        if (typeof value === 'boolean' || (typeof value === 'string' ? value !== '' : value > 0)) {
+          newExtra[key] = value
+        } else {
+          delete newExtra[key]
+        }
+      }
       updatePayload.extra = newExtra
     }
 

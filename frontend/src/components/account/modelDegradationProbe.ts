@@ -7,6 +7,15 @@ export const MODEL_DEGRADATION_MAX_MINUTES = 7 * 24 * 60
 export const MODEL_DEGRADATION_MAX_PAUSE_THRESHOLD = 100
 export const MODEL_DEGRADATION_DEFAULT_PAUSE_MINUTES = 60
 
+export function defaultProbeModel(platform?: string): string {
+  return platform === 'anthropic' ? 'claude-opus-5-5' : MODEL_DEGRADATION_DEFAULT_MODEL
+}
+
+export function isProbeAccount(platform: string, type: string): boolean {
+  if (platform === 'anthropic') return ['oauth', 'setup-token', 'apikey', 'bedrock', 'service_account'].includes(type)
+  return platform === 'openai' && (type === 'oauth' || type === 'apikey')
+}
+
 const PAUSE_ENABLED_KEY = 'model_degradation_probe_pause_enabled'
 const MODEL_KEY = 'model_degradation_probe_model'
 

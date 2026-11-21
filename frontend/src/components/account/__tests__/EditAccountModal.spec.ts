@@ -1042,8 +1042,9 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('upstream_request_id_header')
   })
 
-  it('keeps the selected degradation probe model and removes it when reset to default', async () => {
+  it.each(['openai', 'anthropic'] as const)('saves and clears the selected degradation probe model for %s', async (platform) => {
     const account = buildAccount()
+    account.platform = platform
     account.extra = { model_degradation_probe_model: 'gpt-6-luna', model_degradation_probe_interval_minutes: 30 }
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()

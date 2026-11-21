@@ -326,9 +326,9 @@ describe('BulkEditAccountModal', () => {
     expect(minutes.attributes('disabled')).toBeUndefined()
   })
 
-  it('非 OpenAI 目标不展示降智检测设置', () => {
+  it('Anthropic 目标展示降智检测设置', () => {
     const wrapper = mountModal({ selectedPlatforms: ['anthropic'], selectedTypes: ['oauth'] })
-    expect(wrapper.find('[data-testid="bulk-edit-model-degradation-section"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="bulk-edit-model-degradation-section"]').exists()).toBe(true)
   })
 
   it('批量开启临时不可调度但没有有效规则时拦截提交', async () => {

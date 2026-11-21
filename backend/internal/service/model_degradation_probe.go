@@ -22,11 +22,11 @@ import (
 )
 
 // 模型降智检测：按账号配置的间隔，用 ModelTrace 数字指纹挑战请求账号选定的检测模型
-// （默认 gpt-6-astra，必须收录在指纹库中）。每次检测并发采集两条回答合并评分，第一候选
+// （必须收录在指纹库中）。每次检测并发采集两条回答合并评分，第一候选
 // 概率达到账号阈值（默认 98%）才是有效结论：第一候选不是检测模型即视为疑似降智，置信度不足按检测失败处理。
 // 检测失败时立即原地重试。配置与结果都存放在 accounts.extra。
 const (
-	// ModelDegradationProbeModelExtraKey 检测的模型，必须收录在指纹库中；缺省或空表示 ModelDegradationProbeDefaultModel。
+	// ModelDegradationProbeModelExtraKey 检测的模型，必须收录在指纹库中；缺省或空时使用平台默认模型。
 	ModelDegradationProbeModelExtraKey      = "model_degradation_probe_model"
 	ModelDegradationProbeConfidenceExtraKey = "model_degradation_probe_min_confidence_percent"
 	// ModelDegradationProbeIntervalExtraKey 检测间隔（分钟），0 或缺省表示不检测。
@@ -43,7 +43,8 @@ const (
 	ModelDegradationProbeExtraKey = "model_degradation_probe"
 
 	// ModelDegradationProbeDefaultModel 未选择检测模型时使用的默认模型。
-	ModelDegradationProbeDefaultModel = "gpt-6.2-astra"
+	ModelDegradationProbeDefaultModel          = "gpt-6.2-astra"
+	modelDegradationProbeDefaultAnthropicModel = "claude-opus-5-5"
 
 	ModelDegradationProbeMaxIntervalMinutes       = 7 * 24 * 60
 	ModelDegradationProbeMaxPauseThreshold        = 100
@@ -78,7 +79,7 @@ var (
 		"MODEL_DEGRADATION_PROBE_UNAVAILABLE", "model degradation probe is unavailable",
 	)
 	ErrModelDegradationProbeAccountInvalid = infraerrors.BadRequest(
-		"MODEL_DEGRADATION_PROBE_ACCOUNT_INVALID", "model degradation probe only supports OpenAI OAuth / API key accounts",
+		"MODEL_DEGRADATION_PROBE_ACCOUNT_INVALID", "unsupported platform or account type for model degradation probe",
 	)
 )
 
@@ -136,6 +137,9 @@ func ModelDegradationProbeModel(account *Account) string {
 	if account != nil {
 		if model, ok := account.Extra[ModelDegradationProbeModelExtraKey].(string); ok && strings.TrimSpace(model) != "" {
 			return strings.TrimSpace(model)
+		}
+		if account.Platform == PlatformAnthropic {
+			return modelDegradationProbeDefaultAnthropicModel
 		}
 	}
 	return ModelDegradationProbeDefaultModel
@@ -214,10 +218,18 @@ func clampModelDegradationProbeSetting(value, maximum int) int {
 	return value
 }
 
-// IsModelDegradationProbeAccount 报告账号是否支持降智检测（OpenAI OAuth / API Key）。
+// IsModelDegradationProbeAccount 报告账号是否支持降智检测（OpenAI 或 Anthropic）。
 func IsModelDegradationProbeAccount(account *Account) bool {
-	return account != nil && account.Platform == PlatformOpenAI &&
-		(account.Type == AccountTypeOAuth || account.Type == AccountTypeAPIKey)
+	if account == nil {
+		return false
+	}
+	switch account.Platform {
+	case PlatformOpenAI:
+		return account.Type == AccountTypeOAuth || account.Type == AccountTypeAPIKey
+	case PlatformAnthropic:
+		return account.IsOAuth() || account.Type == AccountTypeAPIKey || account.Type == AccountTypeBedrock || account.Type == AccountTypeServiceAccount
+	}
+	return false
 }
 
 // ValidateModelDegradationProbeExtra 校验管理端提交的降智检测配置。
@@ -345,7 +357,7 @@ func modelDegradationProbeNextAt(account *Account, snapshot *ModelDegradationPro
 	return snapshot.LastAttemptAt.Add(time.Duration(intervalMinutes) * time.Minute)
 }
 
-// ModelDegradationProbeService 周期性检测账号的 gpt-6-astra 是否降智。
+// ModelDegradationProbeService 周期性检测账号选定的模型 是否降智。
 type ModelDegradationProbeService struct {
 	accountRepo AccountRepository
 	tester      modelDegradationProbeTester

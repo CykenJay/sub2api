@@ -3910,7 +3910,7 @@ func (r *accountRepository) FindByExtraField(ctx context.Context, key string, va
 // Without this, every nanosecond timestamp is treated as malformed and the
 // fail-open ordering pins the cycle to the lowest account IDs, starving the
 // rest of the pool.
-// ListModelDegradationProbeCandidates 列出配置了降智检测间隔的活跃 OpenAI 账号，
+// ListModelDegradationProbeCandidates 列出配置了降智检测间隔的活跃 OpenAI 或 Anthropic 账号，
 // 只取 id 与 extra，到期判断在服务层完成。
 func (r *accountRepository) ListModelDegradationProbeCandidates(ctx context.Context) ([]service.ModelDegradationProbeCandidateRow, error) {
 	if r.sql == nil {
@@ -3921,8 +3921,8 @@ func (r *accountRepository) ListModelDegradationProbeCandidates(ctx context.Cont
 		FROM accounts
 		WHERE deleted_at IS NULL
 			AND status = 'active'
-			AND platform = 'openai'
-			AND type IN ('oauth', 'apikey')
+			AND ((platform = 'openai' AND type IN ('oauth', 'apikey'))
+			 OR (platform = 'anthropic' AND type IN ('oauth', 'setup-token', 'apikey', 'bedrock', 'service_account')))
 			AND extra ? 'model_degradation_probe_interval_minutes'
 		ORDER BY id ASC
 	`)

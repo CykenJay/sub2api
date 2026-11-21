@@ -57,7 +57,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
 import {
-  MODEL_DEGRADATION_DEFAULT_MODEL,
+  defaultProbeModel,
   MODEL_DEGRADATION_MAX_MINUTES,
   MODEL_DEGRADATION_MAX_PAUSE_THRESHOLD,
   loadModelDegradationProbeModels,
@@ -65,6 +65,7 @@ import {
 } from './modelDegradationProbe'
 
 const props = defineProps<{
+  platform?: string
   modelValue: ModelDegradationSettings
 }>()
 
@@ -81,13 +82,14 @@ onMounted(async () => {
 })
 
 // 已保存但不在当前指纹库里的模型也保留为选项，避免编辑时被悄悄改掉。
+const defaultModel = computed(() => defaultProbeModel(props.platform))
 const modelOptions = computed(() => {
-  const models = probeModels.value.filter((model) => model !== MODEL_DEGRADATION_DEFAULT_MODEL)
-  if (props.modelValue.model && props.modelValue.model !== MODEL_DEGRADATION_DEFAULT_MODEL && !models.includes(props.modelValue.model)) {
+  const models = probeModels.value.filter((model) => model !== defaultModel.value)
+  if (props.modelValue.model && props.modelValue.model !== defaultModel.value && !models.includes(props.modelValue.model)) {
     models.unshift(props.modelValue.model)
   }
   return [
-    { value: '', label: t('admin.accounts.modelDegradation.defaultModel', { model: MODEL_DEGRADATION_DEFAULT_MODEL }) },
+    { value: '', label: t('admin.accounts.modelDegradation.defaultModel', { model: defaultModel.value }) },
     ...models.map((model) => ({ value: model, label: model }))
   ]
 })
@@ -150,7 +152,7 @@ const fields: {
 
 function updateModel(value: string | number | boolean | null) {
   const model = typeof value === 'string' ? value : ''
-  emit('update:modelValue', { ...props.modelValue, model: model === MODEL_DEGRADATION_DEFAULT_MODEL ? '' : model })
+  emit('update:modelValue', { ...props.modelValue, model: model === defaultModel.value ? '' : model })
 }
 
 function togglePause(event: Event) {

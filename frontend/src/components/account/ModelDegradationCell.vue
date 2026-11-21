@@ -115,7 +115,8 @@ import { formatDateTime } from '@/utils/format'
 import type { Account, ModelDegradationProbeSnapshot } from '@/types'
 import {
   MODEL_DEGRADATION_DEFAULT_CONFIDENCE,
-  MODEL_DEGRADATION_DEFAULT_MODEL,
+  defaultProbeModel,
+  isProbeAccount,
   computeModelDegradationSchedule,
   readModelDegradationSettings
 } from './modelDegradationProbe'
@@ -135,11 +136,11 @@ const { t } = useI18n()
 
 const settings = computed(() => readModelDegradationSettings(props.account.extra))
 // 尚无检测结果时展示账号当前选择的检测模型。
-const configuredModel = computed(() => settings.value.model || MODEL_DEGRADATION_DEFAULT_MODEL)
+const configuredModel = computed(() => settings.value.model || defaultProbeModel(props.account.platform))
 const pauseEnabled = computed(() => settings.value.pauseEnabled)
 
 const eligible = computed(() =>
-  props.account.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'apikey')
+  isProbeAccount(props.account.platform, props.account.type)
 )
 const snapshot = computed<ModelDegradationProbeSnapshot | undefined>(() => {
   const value = props.account.extra?.model_degradation_probe

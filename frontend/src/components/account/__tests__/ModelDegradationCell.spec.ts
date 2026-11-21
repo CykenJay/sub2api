@@ -27,8 +27,8 @@ function mountCell(account: Partial<Account>) {
 }
 
 describe('ModelDegradationCell', () => {
-  it('非 OpenAI 账号显示占位', () => {
-    const wrapper = mountCell({ platform: 'anthropic' })
+  it('不支持的账号显示占位', () => {
+    const wrapper = mountCell({ platform: 'gemini' })
     expect(wrapper.find('[data-testid="model-degradation-status"]').exists()).toBe(false)
     expect(wrapper.text()).toBe('-')
   })
